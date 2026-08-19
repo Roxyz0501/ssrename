@@ -1,0 +1,15 @@
+src/**/bin/
+src/**/obj/
+tests/**/bin/
+tests/**/obj/
+tools/**/bin/
+tools/**/obj/
+dist/
+release/
+.vs/
+*.log
+*.config.xml
+*.bak
+*.tmp
+*.user
+*.suo

@@ -1,0 +1,16 @@
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" Condition="false" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{3BCB4A0D-CF34-45B4-92E9-4CFDAF3B7276}</ProjectGuid>
+    <OutputType>Exe</OutputType><RootNamespace>SSRename.Updater</RootNamespace><AssemblyName>SSRename.Updater</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion><OutputPath>..\..\dist\</OutputPath>
+    <Authors>Roxyz0501</Authors><Company>Roxyz0501</Company><Copyright>Copyright © Roxyz0501 2026</Copyright>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' "><Optimize>true</Optimize><DefineConstants>TRACE</DefineConstants></PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' "><DebugSymbols>true</DebugSymbols><DebugType>full</DebugType><DefineConstants>DEBUG;TRACE</DefineConstants></PropertyGroup>
+  <ItemGroup><Reference Include="System" /><Reference Include="System.Core" /></ItemGroup>
+  <ItemGroup><Compile Include="Program.cs" /><Compile Include="..\..\src\SSRename\HashVerifier.cs"><Link>HashVerifier.cs</Link></Compile></ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

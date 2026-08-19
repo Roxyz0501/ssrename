@@ -1,0 +1,52 @@
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" Condition="false" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{0C47D34C-E3A9-4E21-B0D2-D80937ADDCB2}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SSRename.Tests</RootNamespace>
+    <AssemblyName>SSRename.Tests</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Optimize>true</Optimize><DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols><DebugType>full</DebugType><DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\SSRename\Models.cs"><Link>Models.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\PluginSettings.cs"><Link>PluginSettings.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\Localization.cs"><Link>Localization.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\GameDataService.cs"><Link>GameDataService.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\FileNameService.cs"><Link>FileNameService.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\ScreenshotWatcher.cs"><Link>ScreenshotWatcher.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\ExternalLinkService.cs"><Link>ExternalLinkService.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\UpdateModels.cs"><Link>UpdateModels.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\SemVersion.cs"><Link>SemVersion.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\GitHubReleaseParser.cs"><Link>GitHubReleaseParser.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\UpdateSource.cs"><Link>UpdateSource.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\HashVerifier.cs"><Link>HashVerifier.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\UpdatePackageValidator.cs"><Link>UpdatePackageValidator.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\UpdatePackageService.cs"><Link>UpdatePackageService.cs</Link></Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\src\SSRename\Data\TerritoryType.csv"><LogicalName>SSRename.Data.TerritoryType.csv</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\src\SSRename\Data\WeatherRate.csv"><LogicalName>SSRename.Data.WeatherRate.csv</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\src\SSRename\Data\Weather.csv"><LogicalName>SSRename.Data.Weather.csv</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\src\SSRename\Data\PlaceName.csv"><LogicalName>SSRename.Data.PlaceName.csv</LogicalName></EmbeddedResource>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
