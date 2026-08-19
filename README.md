@@ -66,17 +66,9 @@ FFXIV Parsing Plugin (`FFXIV_ACT_Plugin.dll`) を先に有効にしてくださ�
 
 検証済みDLLは一時領域へ置き、`SSRename.Updater.exe` がACT終了を待ちます。終了後、現行DLLを `SSRename.dll.bak` へバックアップしてから置換し、失敗時はバックアップを復元します。更新後はACTを再起動してください。
 
-### 現在の更新元に関する制約
+### 更新元
 
-2026-08-20時点では、公開検索でRoxyz0501のSSRename用GitHubリポジトリを確認できなかったため、誤ったURLを埋め込んでいません。現在は「更新元が未設定」と安全に表示され、ネットワーク通信や更新ボタンは実行されません。
-
-実在するリポジトリを作成した後、次を正しい値へ設定して再ビルドしてください。
-
-```csharp
-// src/SSRename/UpdateSource.cs
-public const string RepositoryOwner = "Roxyz0501";
-public const string RepositoryName = "実在するリポジトリ名";
-```
+安定版の更新確認と配布物の取得元は、公開リポジトリ [Roxyz0501/ssrename](https://github.com/Roxyz0501/ssrename) のGitHub Releasesです。認証トークンをプラグインへ埋め込まず、公開APIとHTTPSのRelease assetだけを使用します。
 
 ### GitHub Releaseの作成
 
