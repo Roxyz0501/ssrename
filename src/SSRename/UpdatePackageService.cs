@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,7 +15,7 @@ namespace SSRename
         private const long MaximumPackageBytes = 50L * 1024L * 1024L;
         private const long MaximumManifestBytes = 1024L * 1024L;
 
-        public async Task PrepareAndScheduleAsync(ReleaseInfo release, CancellationToken cancellationToken)
+        public async Task<string> PrepareAsync(ReleaseInfo release, CancellationToken cancellationToken)
         {
             if (release == null || release.Version == null) throw new InvalidOperationException("Release information is missing.");
             var package = release.Assets.FirstOrDefault(asset =>
@@ -31,6 +29,8 @@ namespace SSRename
             var root = Path.Combine(Path.GetTempPath(), "SSRename", "updates", release.Version + "-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             var packagePath = Path.Combine(root, package.Name);
+            try
+            {
             await DownloadAsync(package.DownloadUrl, packagePath, MaximumPackageBytes, cancellationToken).ConfigureAwait(false);
 
             string expectedHash = null;
@@ -44,20 +44,14 @@ namespace SSRename
 
             var extracted = Path.Combine(root, "validated");
             var stagedDll = UpdatePackageValidator.ValidateAndExtract(packagePath, extracted, release.Version, expectedHash);
-            var currentDll = Assembly.GetExecutingAssembly().Location;
-            var updater = Path.Combine(Path.GetDirectoryName(currentDll), "SSRename.Updater.exe");
-            if (!File.Exists(updater)) throw new FileNotFoundException("SSRename.Updater.exe is missing.", updater);
-            var backup = currentDll + ".bak";
-            var hash = HashVerifier.ComputeSha256(stagedDll);
-            var arguments = "--pid " + Process.GetCurrentProcess().Id +
-                " --source " + Quote(stagedDll) + " --target " + Quote(currentDll) +
-                " --backup " + Quote(backup) + " --sha256 " + hash;
-            Process.Start(new ProcessStartInfo(updater, arguments)
+            cancellationToken.ThrowIfCancellationRequested();
+            return stagedDll;
+            }
+            catch
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+                throw;
+            }
         }
 
         private static async Task DownloadAsync(string url, string destination, long maximumBytes, CancellationToken cancellationToken)
@@ -112,9 +106,5 @@ namespace SSRename
                 host == "objects.githubusercontent.com" || host.EndsWith(".githubusercontent.com", StringComparison.Ordinal);
         }
 
-        private static string Quote(string value)
-        {
-            return "\"" + value.Replace("\"", "\\\"") + "\"";
-        }
     }
 }

@@ -29,6 +29,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="..\..\src\SSRename\Models.cs"><Link>Models.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\PluginSettings.cs"><Link>PluginSettings.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\SettingsSaveCoordinator.cs"><Link>SettingsSaveCoordinator.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\Localization.cs"><Link>Localization.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\GameDataService.cs"><Link>GameDataService.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\FileNameService.cs"><Link>FileNameService.cs</Link></Compile>

@@ -25,6 +25,10 @@ namespace SSRename.Tests
             Run("ZIP destination validation", TestZipPaths);
             Run("corrupt update asset rejection", TestCorruptAsset);
             Run("legacy Config language initialization", TestLegacyConfig);
+            Run("settings no-op and fixed cadence", TestSettingsCadence);
+            Run("settings final flush and reload", TestSettingsFinalFlush);
+            Run("settings failed save preserves file and dirty state", TestSettingsFailureRetry);
+            Run("watcher stop waits and preserves source", TestWatcherStop);
             Console.WriteLine(failures == 0 ? "All SSRename tests passed." : failures + " test(s) failed.");
             return failures == 0 ? 0 : 1;
         }
@@ -93,6 +97,7 @@ namespace SSRename.Tests
                     }, Context);
                     var original = Path.Combine(sourceFolder, "ffxiv_20260731_142530_123.png");
                     File.WriteAllBytes(original, new byte[] { 1, 2, 3, 4 });
+                    watcher.NotifyCreatedForTests(original);
                     True(completed.WaitOne(TimeSpan.FromSeconds(8)), "watcher timed out");
                     True(!File.Exists(original), "source was not moved");
                     True(File.Exists(movedTo), "destination does not exist");
@@ -229,6 +234,119 @@ namespace SSRename.Tests
             finally { Directory.Delete(root, true); }
         }
 
+        private static void TestSettingsCadence()
+        {
+            Equal(TimeSpan.FromSeconds(60), SettingsSaveCoordinator.DefaultInterval);
+            var baseline = new PluginSettings { Language = Localization.English };
+            var current = baseline.Clone();
+            var writes = 0;
+            using (var noOp = new SettingsSaveCoordinator(baseline, delegate { return current.Clone(); }, delegate { Interlocked.Increment(ref writes); }, TimeSpan.FromMilliseconds(100)))
+            {
+                noOp.Start();
+                Thread.Sleep(250);
+                Equal(0, writes);
+            }
+            using (var coordinator = new SettingsSaveCoordinator(baseline, delegate { return current.Clone(); }, delegate { Interlocked.Increment(ref writes); }, TimeSpan.FromMilliseconds(600)))
+            {
+                coordinator.Start();
+                Thread.Sleep(100);
+                current.FileNameTemplate = "edit-one";
+                Thread.Sleep(70);
+                current.FileNameTemplate = "edit-two";
+                Thread.Sleep(150);
+                Equal(0, writes);
+                True(SpinWait.SpinUntil(delegate { return Volatile.Read(ref writes) == 1; }, 500), "first fixed cadence save did not happen");
+                Equal("edit-two", current.FileNameTemplate);
+                Thread.Sleep(300);
+                Equal(1, writes);
+            }
+        }
+
+        private static void TestSettingsFinalFlush()
+        {
+            var root = NewTemporaryRoot();
+            try
+            {
+                var path = Path.Combine(root, "config.xml");
+                var baseline = new PluginSettings { Language = Localization.English };
+                baseline.Save(path);
+                var current = baseline.Clone();
+                using (var coordinator = SettingsSaveCoordinator.ForFile(path, baseline, delegate { return current.Clone(); }, TimeSpan.FromSeconds(30)))
+                {
+                    coordinator.Start();
+                    current.Language = Localization.Japanese;
+                    True(coordinator.StopAndFlush(), "final save failed");
+                }
+                Equal(Localization.Japanese, PluginSettings.Load(path).Language);
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void TestSettingsFailureRetry()
+        {
+            var root = NewTemporaryRoot();
+            try
+            {
+                var path = Path.Combine(root, "config.xml");
+                var baseline = new PluginSettings { Language = Localization.English };
+                baseline.Save(path);
+                var original = File.ReadAllBytes(path);
+                var current = baseline.Clone(); current.Language = Localization.Korean;
+                var failed = 0;
+                using (var coordinator = SettingsSaveCoordinator.ForFile(path, baseline, delegate { return current.Clone(); }, TimeSpan.FromMilliseconds(200)))
+                {
+                    coordinator.SaveFailed += delegate { Interlocked.Increment(ref failed); };
+                    coordinator.Start();
+                    using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        True(SpinWait.SpinUntil(delegate { return Volatile.Read(ref failed) > 0; }, 1000), "locked save did not fail");
+                        var afterFailure = File.ReadAllBytes(path);
+                        True(BytesEqual(original, afterFailure), "failed save damaged existing config");
+                    }
+                    True(SpinWait.SpinUntil(delegate { return Localization.Korean == PluginSettings.Load(path).Language; }, 1500), "dirty save was not retried after failure");
+                }
+                True(failed > 0, "dirty save failure was not retained/retried");
+                Equal(Localization.Korean, PluginSettings.Load(path).Language);
+                Equal(0, Directory.GetFiles(root, "*.tmp").Length);
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void TestWatcherStop()
+        {
+            var root = NewTemporaryRoot();
+            var sourceFolder = Path.Combine(root, "source"); var destination = Path.Combine(root, "destination"); Directory.CreateDirectory(sourceFolder);
+            var entered = new ManualResetEvent(false); var release = new ManualResetEvent(false);
+            try
+            {
+                using (var watcher = new ScreenshotWatcher(delegate(string path, TimeSpan timeout, CancellationToken token)
+                {
+                    entered.Set(); release.WaitOne(); return true;
+                }))
+                {
+                    watcher.Restart(new PluginSettings { RenameEnabled = true, ScreenshotFolder = sourceFolder, UseScreenshotFolderAsDestination = false, DestinationFolder = destination, Language = Localization.English }, Context);
+                    var original = Path.Combine(sourceFolder, "shot.png"); File.WriteAllBytes(original, new byte[] { 1, 2, 3 });
+                    watcher.NotifyCreatedForTests(original);
+                    True(entered.WaitOne(3000), "watch job did not start");
+                    var stopping = System.Threading.Tasks.Task.Run((Action)watcher.Stop);
+                    Thread.Sleep(100);
+                    True(!stopping.IsCompleted, "Stop returned before in-flight processing completed");
+                    release.Set();
+                    True(stopping.Wait(3000), "Stop did not complete after job release");
+                    True(File.Exists(original), "cancelled job moved the original image");
+                    Equal(0, watcher.ActiveJobCount);
+                }
+            }
+            finally { release.Set(); entered.Dispose(); release.Dispose(); Directory.Delete(root, true); }
+        }
+
+        private static bool BytesEqual(byte[] left, byte[] right)
+        {
+            if (left.Length != right.Length) return false;
+            for (var i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
+            return true;
+        }
+
         private static ScreenshotContext Context()
         {
             return new ScreenshotContext
@@ -244,7 +362,7 @@ namespace SSRename.Tests
 
         private static string NewTemporaryRoot()
         {
-            var root = Path.Combine(Path.GetTempPath(), "SSRenameTests", Guid.NewGuid().ToString("N"));
+            var root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-temp", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             return root;
         }
@@ -252,7 +370,7 @@ namespace SSRename.Tests
         private static void Run(string name, Action test)
         {
             try { test(); Console.WriteLine("PASS " + name); }
-            catch (Exception ex) { failures++; Console.WriteLine("FAIL " + name + ": " + ex.Message); }
+            catch (Exception ex) { failures++; Console.WriteLine("FAIL " + name + ": " + ex); }
         }
 
         private static void Equal<T>(T expected, T actual)

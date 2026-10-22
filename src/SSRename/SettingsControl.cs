@@ -26,6 +26,7 @@ namespace SSRename
         private Label updateMessage, currentVersionValue, latestVersionValue, lastCheckedValue;
         private ListBox historyList;
         private bool building;
+        private bool uiInactive;
         private ContextStatus lastContext;
         private string lastWatcherMessage;
         private bool lastWatcherError;
@@ -33,6 +34,7 @@ namespace SSRename
         private readonly List<string> history = new List<string>();
 
         public event EventHandler SettingsChanged;
+        public event EventHandler WatchFolderSettingsCommitted;
         public event EventHandler CheckUpdatesRequested;
         public event Action<ReleaseInfo> InstallUpdateRequested;
         public event Action<ReleaseInfo> SkipUpdateRequested;
@@ -101,7 +103,10 @@ namespace SSRename
             destinationText = new TextBox { Text = settings.DestinationFolder, Dock = DockStyle.Fill }; destinationBrowseButton = NewButton(T("browse"), BrowseDestination); AddRow(table, T("destination_changed"), MakePathEditor(destinationText, destinationBrowseButton));
             AddRow(table, T("folder_actions"), NewButton(T("open_destination"), OpenDestination)); AddWideRow(table, NewNote(T("basic_note")));
             enabledCheck.CheckedChanged += delegate { RaiseSettingsChanged(); }; sameDestinationCheck.CheckedChanged += delegate { UpdateDestinationState(); RaiseSettingsChanged(); };
-            sourceText.Leave += delegate { RaiseSettingsChanged(); }; destinationText.Leave += delegate { RaiseSettingsChanged(); };
+            sourceText.TextChanged += delegate { RaiseSettingsChanged(); };
+            sourceText.Leave += delegate { RaiseSettingsChanged(); if (WatchFolderSettingsCommitted != null) WatchFolderSettingsCommitted(this, EventArgs.Empty); };
+            destinationText.TextChanged += delegate { RaiseSettingsChanged(); };
+            destinationText.Leave += delegate { RaiseSettingsChanged(); };
         }
 
         private void BuildNamePage(TabPage page)
@@ -109,7 +114,7 @@ namespace SSRename
             var table = NewTable(); page.Controls.Add(table); templateText = new TextBox { Text = settings.FileNameTemplate, Dock = DockStyle.Fill }; AddRow(table, T("template"), templateText); AddWideRow(table, NewNote(T("template_note")));
             previewLabel = new Label { AutoSize = true, ForeColor = Color.FromArgb(45, 58, 77), Padding = new Padding(4, 8, 4, 8) }; AddRow(table, T("preview"), previewLabel);
             AddRow(table, T("template_actions"), NewButton(T("reset_template"), delegate { templateText.Text = "ffxiv_{timestamp}_{character}@{world}_{place}_{weather}_{et}"; RaiseSettingsChanged(); }));
-            templateText.TextChanged += delegate { UpdatePreview(); }; templateText.Leave += delegate { RaiseSettingsChanged(); };
+            templateText.TextChanged += delegate { UpdatePreview(); RaiseSettingsChanged(); };
         }
 
         private void BuildStatusPage(TabPage page)
@@ -191,7 +196,15 @@ namespace SSRename
         private void OpenDestination(object s, EventArgs e) { var path = sameDestinationCheck.Checked ? sourceText.Text.Trim() : destinationText.Text.Trim(); try { if (Directory.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); else MessageBox.Show(this, T("destination_missing"), "SSRename", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch (Exception ex) { MessageBox.Show(this, T("destination_missing") + "\r\n" + ex.Message, "SSRename", MessageBoxButtons.OK, MessageBoxIcon.Warning); } }
         private void UpdateDestinationState() { if (destinationText != null) { destinationText.Enabled = !sameDestinationCheck.Checked; destinationBrowseButton.Enabled = !sameDestinationCheck.Checked; } }
         private void UpdatePreview() { if (previewLabel == null) return; var value = string.IsNullOrWhiteSpace(templateText.Text) ? "ffxiv_{timestamp}_{character}@{world}_{place}_{weather}_{et}" : templateText.Text; previewLabel.Text = value.Replace("{character}", "Taro Yamada").Replace("{world}", "Chocobo").Replace("{place}", "Limsa Lominsa").Replace("{timestamp}", "20260731_142530_123").Replace("{weather}", "Clear Skies").Replace("{et}", "ET1842") + ".png"; }
-        private void RaiseSettingsChanged() { if (!building && SettingsChanged != null) SettingsChanged(this, EventArgs.Empty); }
-        private void SafeUi(Action action) { if (IsDisposed) return; if (InvokeRequired) BeginInvoke(action); else action(); }
+        internal void DisableBackgroundUi() { uiInactive = true; }
+        private void RaiseSettingsChanged() { if (!building && !uiInactive && SettingsChanged != null) SettingsChanged(this, EventArgs.Empty); }
+        private void SafeUi(Action action)
+        {
+            if (uiInactive || IsDisposed) return;
+            Action guarded = delegate { if (!uiInactive && !IsDisposed) action(); };
+            try { if (InvokeRequired) BeginInvoke(guarded); else guarded(); }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
     }
 }

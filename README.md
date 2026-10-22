@@ -22,8 +22,7 @@ ffxiv_20260731_142530_123_Taro Yamada@Chocobo_リムサ・ロミンサ：上甲�
 
 1. `dist/SSRename.dll` を任意のACTプラグイン用フォルダへ置きます。
 2. ACTの `Plugins` → `Plugin Listing` → `Browse...` で `SSRename.dll` を選び、`Add/Enable Plugin` を押します。
-3. 同じフォルダに `SSRename.Updater.exe` も配置します。
-4. `Screenshot Rename` タブでFFXIV接続と監視状態を確認します。
+3. `Screenshot Rename` タブでFFXIV接続と監視状態を確認します。
 
 FFXIV Parsing Plugin (`FFXIV_ACT_Plugin.dll`) を先に有効にしてください。キャラクター名、ワールド名、テリトリーID、サーバー時刻は同プラグインの公開APIから取得します。
 
@@ -64,7 +63,7 @@ FFXIV Parsing Plugin (`FFXIV_ACT_Plugin.dll`) を先に有効にしてくださ�
 - ZIP内の許可ファイル限定、絶対パス／親ディレクトリ／サブディレクトリ拒否
 - 最大サイズとリダイレクト先GitHubホストの制限
 
-検証済みDLLは一時領域へ置き、`SSRename.Updater.exe` がACT終了を待ちます。終了後、現行DLLを `SSRename.dll.bak` へバックアップしてから置換し、失敗時はバックアップを復元します。更新後はACTを再起動してください。
+検証済みDLLは一時領域へ準備します。ロード中のDLLは変更せず、ACTを完全に終了した後に画面に表示された一時領域のDLLをプラグイン配置先の `SSRename.dll` へ手動で置き換えてください。置き換え前に現行DLLをバックアップし、更新後にACTを再起動してください。プラグイン終了後に補助プロセスが残らないよう、更新の自動置換は行いません。
 
 ### 更新元
 
