@@ -285,9 +285,9 @@ namespace SSRename.Tests
                 {
                     UpdatePackageValidator.ValidateAndExtract(zip, Path.Combine(root, "no-hash"), null, null, CancellationToken.None);
                 }, "missing package SHA-256 was accepted");
-                Throws<InvalidDataException>(delegate { UpdatePackageService.GetRequiredPackageHash("", "SSRename-1.0.2.zip"); }, "missing manifest entry was accepted");
+                Throws<InvalidDataException>(delegate { UpdatePackageService.GetRequiredPackageHash("", "SSRename-1.0.3.zip"); }, "missing manifest entry was accepted");
                 var validHash = new string('a', 64);
-                Equal(validHash, UpdatePackageService.GetRequiredPackageHash(validHash + "  SSRename-1.0.2.zip\n", "SSRename-1.0.2.zip"));
+                Equal(validHash, UpdatePackageService.GetRequiredPackageHash(validHash + "  SSRename-1.0.3.zip\n", "SSRename-1.0.3.zip"));
 
                 var source = new CancellationTokenSource(); source.Cancel();
                 Throws<OperationCanceledException>(delegate
@@ -305,7 +305,7 @@ namespace SSRename.Tests
             var root = NewTemporaryRoot();
             try
             {
-                SemVersion version; True(SemVersion.TryParse("1.0.2", out version), "test SemVer failed");
+                SemVersion version; True(SemVersion.TryParse("1.0.3", out version), "test SemVer failed");
                 var packageHash = new string('b', 64);
                 Equal(UpdatePackageService.CreateStageKey(version, packageHash), UpdatePackageService.CreateStageKey(version, packageHash));
 
@@ -319,7 +319,7 @@ namespace SSRename.Tests
                 True(!UpdatePackageService.IsReusableStage(stage, version), "tampered staged DLL was reusable");
 
                 var now = DateTime.UtcNow;
-                var keep = "1.0.2-aaaaaaaaaaaa";
+                var keep = "1.0.3-aaaaaaaaaaaa";
                 foreach (var name in new[] { keep, "1.0.1-bbbbbbbbbbbb", "1.0.0-cccccccccccc", "0.9.9-dddddddddddd" })
                 {
                     var path = Path.Combine(root, name); Directory.CreateDirectory(path); File.WriteAllText(Path.Combine(path, "marker"), "x");

@@ -25,7 +25,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $actRoot = Join-Path $env:RUNNER_TEMP 'act'
           $actZip = Join-Path $env:RUNNER_TEMP 'ACTv3.zip'
-          Invoke-WebRequest -Uri 'https://advancedcombattracker.com/download.php?id=57' -OutFile $actZip
+          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/EQAditu/AdvancedCombatTracker/releases/latest' -Headers @{ 'User-Agent' = 'SSRename-CI' }
+          $assets = @($release.assets | Where-Object { $_.name -ceq 'ACTv3.zip' })
+          if ($assets.Count -ne 1) { throw "Expected one ACTv3.zip in the official ACT release, found $($assets.Count)." }
+          if ($assets[0].digest -notmatch '^sha256:[0-9a-fA-F]{64}$') { throw 'Official ACT release metadata does not provide a valid SHA-256 digest.' }
+          Invoke-WebRequest -Uri $assets[0].browser_download_url -Headers @{ 'User-Agent' = 'SSRename-CI' } -OutFile $actZip
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $actZip).Hash.ToLowerInvariant()
+          if ($assets[0].digest -cne "sha256:$actualHash") { throw 'Official ACT archive SHA-256 does not match release metadata.' }
           Expand-Archive -LiteralPath $actZip -DestinationPath $actRoot
           $actExe = Get-ChildItem -LiteralPath $actRoot -Filter 'Advanced Combat Tracker.exe' -Recurse | Select-Object -First 1
           if ($null -eq $actExe) { throw 'Advanced Combat Tracker.exe was not found in the official archive.' }
