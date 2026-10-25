@@ -2,6 +2,8 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace SSRename.Tests
@@ -24,6 +26,9 @@ namespace SSRename.Tests
             Run("SHA-256 verification", TestHashVerification);
             Run("ZIP destination validation", TestZipPaths);
             Run("corrupt update asset rejection", TestCorruptAsset);
+            Run("update ZIP duplicate and metadata limits", TestUpdateZipLimits);
+            Run("update ZIP required SHA and cancellation", TestUpdateZipShaAndCancellation);
+            Run("update stage reuse, expiry, and cap", TestUpdateStageRetention);
             Run("legacy Config language initialization", TestLegacyConfig);
             Run("settings no-op and fixed cadence", TestSettingsCadence);
             Run("settings final flush and reload", TestSettingsFinalFlush);
@@ -205,12 +210,153 @@ namespace SSRename.Tests
                 var path = Path.Combine(root, "broken.zip"); File.WriteAllText(path, "not a zip");
                 try
                 {
-                    UpdatePackageValidator.ValidateAndExtract(path, Path.Combine(root, "out"), null, new string('0', 64));
+                    UpdatePackageValidator.ValidateAndExtract(path, Path.Combine(root, "out"), null, new string('0', 64), CancellationToken.None);
                     throw new InvalidOperationException("corrupt asset was accepted");
                 }
                 catch (InvalidDataException) { }
             }
             finally { Directory.Delete(root, true); }
+        }
+
+        private static void TestUpdateZipLimits()
+        {
+            Throws<InvalidDataException>(delegate
+            {
+                UpdatePackageValidator.ValidateEntryMetadata(new[]
+                {
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.dll", Length = 1 },
+                    new UpdatePackageValidator.EntryMetadata { Name = "ssrename.DLL", Length = 1 }
+                });
+            }, "duplicate names were accepted");
+
+            Throws<InvalidDataException>(delegate
+            {
+                UpdatePackageValidator.ValidateEntryMetadata(new[]
+                {
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.dll", Length = UpdatePackageValidator.MaximumEntryBytes + 1 }
+                });
+            }, "oversized per-entry metadata was accepted");
+
+            Throws<InvalidDataException>(delegate
+            {
+                UpdatePackageValidator.ValidateEntryMetadata(new[]
+                {
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.dll", Length = 9L * 1024L * 1024L },
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.pdb", Length = 9L * 1024L * 1024L },
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.Updater.exe", Length = 9L * 1024L * 1024L }
+                });
+            }, "oversized total expansion metadata was accepted");
+
+            Throws<InvalidDataException>(delegate
+            {
+                UpdatePackageValidator.ValidateEntryMetadata(new[]
+                {
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.dll", Length = 1 },
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.pdb", Length = 1 },
+                    new UpdatePackageValidator.EntryMetadata { Name = "SSRename.Updater.exe", Length = 1 },
+                    new UpdatePackageValidator.EntryMetadata { Name = "README.md", Length = 1 },
+                    new UpdatePackageValidator.EntryMetadata { Name = "THIRD_PARTY_DATA.md", Length = 1 },
+                    new UpdatePackageValidator.EntryMetadata { Name = "extra.txt", Length = 1 }
+                });
+            }, "too many entries were accepted");
+
+            var root = NewTemporaryRoot();
+            try
+            {
+                var zip = Path.Combine(root, "duplicate.zip");
+                CreateZip(zip, new[] { "SSRename.dll", "SSRename.dll" });
+                Throws<InvalidDataException>(delegate
+                {
+                    UpdatePackageValidator.ValidateAndExtract(zip, Path.Combine(root, "out"), null, HashVerifier.ComputeSha256(zip), CancellationToken.None);
+                }, "duplicate ZIP entries were accepted");
+                True(!Directory.Exists(Path.Combine(root, "out")), "files were written before complete ZIP prevalidation");
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void TestUpdateZipShaAndCancellation()
+        {
+            var root = NewTemporaryRoot();
+            try
+            {
+                var zip = Path.Combine(root, "tiny.zip");
+                CreateZip(zip, new[] { "SSRename.dll" });
+                Throws<InvalidDataException>(delegate
+                {
+                    UpdatePackageValidator.ValidateAndExtract(zip, Path.Combine(root, "no-hash"), null, null, CancellationToken.None);
+                }, "missing package SHA-256 was accepted");
+                Throws<InvalidDataException>(delegate { UpdatePackageService.GetRequiredPackageHash("", "SSRename-1.0.2.zip"); }, "missing manifest entry was accepted");
+                var validHash = new string('a', 64);
+                Equal(validHash, UpdatePackageService.GetRequiredPackageHash(validHash + "  SSRename-1.0.2.zip\n", "SSRename-1.0.2.zip"));
+
+                var source = new CancellationTokenSource(); source.Cancel();
+                Throws<OperationCanceledException>(delegate
+                {
+                    UpdatePackageValidator.ValidateAndExtract(zip, Path.Combine(root, "cancelled"), null, HashVerifier.ComputeSha256(zip), source.Token);
+                }, "pre-cancelled package extraction continued");
+                True(!Directory.Exists(Path.Combine(root, "cancelled")), "cancelled extraction created output");
+                source.Dispose();
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void TestUpdateStageRetention()
+        {
+            var root = NewTemporaryRoot();
+            try
+            {
+                SemVersion version; True(SemVersion.TryParse("1.0.2", out version), "test SemVer failed");
+                var packageHash = new string('b', 64);
+                Equal(UpdatePackageService.CreateStageKey(version, packageHash), UpdatePackageService.CreateStageKey(version, packageHash));
+
+                var pluginDll = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "dist", "SSRename.dll"));
+                True(File.Exists(pluginDll), "Release build SSRename.dll was not available for stage-cache verification");
+                var stage = Path.Combine(root, UpdatePackageService.CreateStageKey(version, packageHash)); Directory.CreateDirectory(stage);
+                var stagedDll = Path.Combine(stage, "SSRename.dll"); File.Copy(pluginDll, stagedDll);
+                File.WriteAllText(Path.Combine(stage, "SSRename.dll.sha256"), HashVerifier.ComputeSha256(stagedDll));
+                True(UpdatePackageService.IsReusableStage(stage, version), "valid staged DLL was not reusable");
+                File.AppendAllText(stagedDll, "tamper");
+                True(!UpdatePackageService.IsReusableStage(stage, version), "tampered staged DLL was reusable");
+
+                var now = DateTime.UtcNow;
+                var keep = "1.0.2-aaaaaaaaaaaa";
+                foreach (var name in new[] { keep, "1.0.1-bbbbbbbbbbbb", "1.0.0-cccccccccccc", "0.9.9-dddddddddddd" })
+                {
+                    var path = Path.Combine(root, name); Directory.CreateDirectory(path); File.WriteAllText(Path.Combine(path, "marker"), "x");
+                    Directory.SetLastWriteTimeUtc(path, now.AddHours(-Array.IndexOf(new[] { keep, "1.0.1-bbbbbbbbbbbb", "1.0.0-cccccccccccc", "0.9.9-dddddddddddd" }, name)));
+                }
+                var expired = Path.Combine(root, "0.1.0-eeeeeeeeeeee"); Directory.CreateDirectory(expired); Directory.SetLastWriteTimeUtc(expired, now.AddDays(-15));
+                var unrelated = Path.Combine(root, "user-data"); Directory.CreateDirectory(unrelated);
+                var staleAttempt = Path.Combine(root, ".staging-old"); Directory.CreateDirectory(staleAttempt); Directory.SetCreationTimeUtc(staleAttempt, now.AddDays(-2));
+
+                UpdatePackageService.CleanupStagingDirectories(root, keep, now);
+                Equal(UpdatePackageService.MaximumRetainedStages, Directory.GetDirectories(root).Length - (Directory.Exists(unrelated) ? 1 : 0));
+                True(Directory.Exists(Path.Combine(root, keep)), "current cache entry was pruned");
+                True(!Directory.Exists(expired), "expired stage was retained");
+                True(!Directory.Exists(staleAttempt), "stale incomplete stage was retained");
+                True(Directory.Exists(unrelated), "unrecognized user data directory was touched");
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        private static void CreateZip(string path, IEnumerable<string> entryNames)
+        {
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+            {
+                foreach (var name in entryNames)
+                {
+                    var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+                    using (var output = entry.Open()) output.WriteByte(0x41);
+                }
+            }
+        }
+
+        private static void Throws<T>(Action action, string message) where T : Exception
+        {
+            try { action(); }
+            catch (T) { return; }
+            throw new InvalidOperationException(message);
         }
 
         private static void TestLegacyConfig()
