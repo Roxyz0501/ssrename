@@ -20,6 +20,8 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net.Http" />
@@ -28,6 +30,10 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\SSRename\SettingsControl.cs" />
+    <Compile Include="..\..\src\SSRename\PluginTabs.cs" />
+    <Compile Include="..\..\src\SSRename\PluginLanguagePage.cs" />
+    <Compile Include="..\..\src\SSRename\PluginUpdatePage.cs" />
     <Compile Include="..\..\src\SSRename\Models.cs"><Link>Models.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\PluginSettings.cs"><Link>PluginSettings.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\SettingsSaveCoordinator.cs"><Link>SettingsSaveCoordinator.cs</Link></Compile>

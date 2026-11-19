@@ -18,7 +18,7 @@ $buildProjects = @(
 )
 foreach ($buildProject in $buildProjects) {
     $buildArguments = @('msbuild', $buildProject, '-t:Rebuild', '-p:Configuration=Release', '-p:UseSharedCompilation=false', '-v:minimal')
-    if (-not [string]::IsNullOrWhiteSpace($ACTPath) -and $buildProject.EndsWith('src/SSRename/SSRename.csproj', [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not [string]::IsNullOrWhiteSpace($ACTPath)) {
         $buildArguments += "-p:ACTPath=$ACTPath"
     }
     & dotnet @buildArguments

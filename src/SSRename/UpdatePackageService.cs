@@ -55,12 +55,6 @@ namespace SSRename
                 var stageDirectory = Path.Combine(updatesRoot, stageKey);
                 var stagedDllPath = Path.Combine(stageDirectory, "SSRename.dll");
                 var stagedUpdaterPath = Path.Combine(stageDirectory, "SSRename.Updater.exe");
-                if (IsReusableStage(stageDirectory, release.Version) && IsReusableUpdater(stageDirectory, release.Version))
-                {
-                    Directory.SetLastWriteTimeUtc(stageDirectory, DateTime.UtcNow);
-                    CleanupStagingDirectories(updatesRoot, stageKey, DateTime.UtcNow);
-                    return new PreparedUpdate { StagedDllPath = stagedDllPath, StagedUpdaterPath = stagedUpdaterPath, DllSha256 = HashVerifier.ComputeSha256(stagedDllPath), UpdaterSha256 = HashVerifier.ComputeSha256(stagedUpdaterPath), Release = release };
-                }
 
                 if (Directory.Exists(stageDirectory)) DeleteOwnedDirectory(stageDirectory);
                 var packagePath = Path.Combine(attemptRoot, package.Name);
@@ -111,7 +105,7 @@ namespace SSRename
             SemVersion version;
             if (!SemVersion.TryParse(versionText, out version) || version.CompareTo(expectedVersion) != 0)
                 throw new InvalidDataException("Updater version does not match the release tag.");
-            var assembly = Assembly.ReflectionOnlyLoadFrom(path);
+            var assembly = Assembly.ReflectionOnlyLoad(File.ReadAllBytes(path));
             var company = assembly.GetCustomAttributesData().FirstOrDefault(attribute => attribute.AttributeType.FullName == "System.Reflection.AssemblyCompanyAttribute");
             if (company == null || company.ConstructorArguments.Count != 1 || !string.Equals(company.ConstructorArguments[0].Value as string, "Roxyz0501", StringComparison.Ordinal))
                 throw new InvalidDataException("The updater company metadata is invalid.");

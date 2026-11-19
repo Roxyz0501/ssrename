@@ -78,17 +78,17 @@ namespace SSRename
 
                 if (!snapshot.RenameEnabled)
                 {
-                    Report(currentGeneration, Localization.T(snapshot.Language, "watch_paused"), false, false);
+                    Report(currentGeneration, lang => Localization.T(lang, "watch_paused"), false, false);
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(snapshot.ScreenshotFolder) || !Directory.Exists(snapshot.ScreenshotFolder))
                 {
-                    Report(currentGeneration, Localization.T(snapshot.Language, "watch_folder_missing"), true, false);
+                    Report(currentGeneration, lang => Localization.T(lang, "watch_folder_missing"), true, false);
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(snapshot.EffectiveDestinationFolder))
                 {
-                    Report(currentGeneration, Localization.T(snapshot.Language, "destination_required"), true, false);
+                    Report(currentGeneration, lang => Localization.T(lang, "destination_required"), true, false);
                     return;
                 }
 
@@ -110,7 +110,7 @@ namespace SSRename
                         accepting = true;
                     }
                     created.EnableRaisingEvents = true;
-                    Report(currentGeneration, Localization.T(snapshot.Language, "watching", snapshot.ScreenshotFolder), false, true);
+                    Report(currentGeneration, lang => Localization.T(lang, "watching", snapshot.ScreenshotFolder), false, true);
                 }
                 catch (Exception ex)
                 {
@@ -122,7 +122,7 @@ namespace SSRename
                         created.Dispose();
                     }
                     StopCore();
-                    Report(currentGeneration, Localization.T(snapshot.Language, "watch_start_failed", ex.GetBaseException().Message), true, false);
+                    Report(currentGeneration, lang => Localization.T(lang, "watch_start_failed", ex.GetBaseException().Message), true, false);
                 }
             }
         }
@@ -187,14 +187,14 @@ namespace SSRename
                 return;
 
             WorkItem work = null;
-            string rejection = null;
+            Func<string,string> rejection = null;
             lock (sync)
             {
                 if (disposed || !accepting || !ReferenceEquals(sender, watcher) || settings == null || !settings.RenameEnabled || generationCancellation == null)
                     return;
                 if (processing.Contains(e.FullPath)) return;
                 if (activeJobs >= MaximumConcurrentJobs)
-                    rejection = Localization.T(settings.Language, "watch_queue_full");
+                    rejection = lang => Localization.T(lang, "watch_queue_full");
                 else
                 {
                     processing.Add(e.FullPath);
@@ -219,7 +219,7 @@ namespace SSRename
             if (!ThreadPool.QueueUserWorkItem(ProcessFile, work))
             {
                 CompleteWork(work);
-                Report(work.Generation, Localization.T(work.Settings.Language, "watch_queue_full"), true, true);
+                Report(work.Generation, lang => Localization.T(lang, "watch_queue_full"), true, true);
             }
         }
 
@@ -262,7 +262,7 @@ namespace SSRename
                     try { FileRenamed(work.SourcePath, destination); }
                     catch { /* UI observers must not turn a successful move into a reported processing failure. */ }
                 }
-                Report(work.Generation, Localization.T(work.Settings.Language, "rename_done", Path.GetFileName(destination)), false, true);
+                Report(work.Generation, lang => Localization.T(lang, "rename_done", Path.GetFileName(destination)), false, true);
             }
             catch (OperationCanceledException)
             {
@@ -271,7 +271,7 @@ namespace SSRename
             catch (Exception ex)
             {
                 if (!work.Cancellation.IsCancellationRequested)
-                    Report(work.Generation, Localization.T(work.Settings.Language, "rename_failed", Path.GetFileName(work.SourcePath), ex.GetBaseException().Message), true, true);
+                    Report(work.Generation, lang => Localization.T(lang, "rename_failed", Path.GetFileName(work.SourcePath), ex.GetBaseException().Message), true, true);
             }
             finally
             {
@@ -332,27 +332,42 @@ namespace SSRename
                 snapshot = settings.Clone();
                 currentGeneration = generation;
             }
-            Report(currentGeneration, Localization.T(snapshot.Language, "watch_error", e.GetException().Message), true, true);
+            Report(currentGeneration, lang => Localization.T(lang, "watch_error", e.GetException().Message), true, true);
         }
 
-        private void ReportForCurrent(string message, bool isError)
+        private void ReportForCurrent(Func<string,string> message, bool isError)
         {
             long currentGeneration;
             lock (sync) currentGeneration = generation;
             Report(currentGeneration, message, isError, true);
         }
 
-        private void Report(long reportGeneration, string message, bool isError, bool requireAccepting)
+        private Func<string,string> lastStatus;
+        private bool lastError;
+
+        public void ReplayStatus()
+        {
+            lock (sync)
+            {
+                if (!disposed && lastStatus != null && settings != null)
+                    StatusChanged?.Invoke(lastStatus(settings.Language), lastError);
+            }
+        }
+
+        private void Report(long reportGeneration, Func<string,string> message, bool isError, bool requireAccepting)
         {
             Action<string, bool> handler;
+            string localized;
             lock (sync)
             {
                 if (disposed || reportGeneration != generation || (requireAccepting && !accepting)) return;
+                lastStatus = message; lastError = isError;
+                localized = message(settings?.Language);
                 handler = StatusChanged;
             }
             if (handler != null)
             {
-                try { handler(message, isError); }
+                try { handler(localized, isError); }
                 catch { /* Watcher lifecycle is independent from UI subscriber failures. */ }
             }
         }

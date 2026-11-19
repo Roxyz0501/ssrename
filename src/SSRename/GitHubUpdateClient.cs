@@ -61,6 +61,7 @@ namespace SSRename
                 }
             }
             catch (RateLimitedException ex) { result.Status = UpdateCheckStatus.RateLimited; result.Error = ex.Message; }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { result.Status = UpdateCheckStatus.Failed; result.Error = "Timeout"; }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { result.Status = UpdateCheckStatus.Failed; result.Error = ex.GetBaseException().Message; }
             return result;
@@ -90,9 +91,9 @@ namespace SSRename
                     var tag = Uri.UnescapeDataString(uri.AbsolutePath.Substring(expectedPrefix.Length));
                     if (tag.Length == 0 || tag.IndexOf('/') >= 0 || tag.IndexOf('\\') >= 0 || tag.IndexOf('%') >= 0)
                         throw new FormatException("GitHub latest-release tag is invalid.");
-                    if (tag.StartsWith("v", StringComparison.OrdinalIgnoreCase)) tag = tag.Substring(1);
+                    
                     SemVersion version;
-                    if (!SemVersion.TryParse(tag, out version)) throw new FormatException("GitHub latest-release tag is not a stable SemVer version.");
+                    if (!SemVersion.TryParse(tag, out version) || !string.IsNullOrEmpty(version.Prerelease) || tag != "v" + version) throw new FormatException("GitHub latest-release tag is not a stable SemVer version.");
                     return version.ToString();
                 }
             }

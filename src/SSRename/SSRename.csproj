@@ -64,6 +64,8 @@
     <Compile Include="UpdatePackageService.cs" />
     <Compile Include="SettingsControl.cs" />
     <Compile Include="PluginTabs.cs" />
+    <Compile Include="PluginLanguagePage.cs" />
+    <Compile Include="PluginUpdatePage.cs" />
     <Compile Include="SSRenamePlugin.cs" />
   </ItemGroup>
   <ItemGroup>

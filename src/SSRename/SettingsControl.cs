@@ -10,21 +10,16 @@ namespace SSRename
 {
     internal sealed class SettingsControl : UserControl
     {
-        private sealed class LanguageChoice
-        {
-            public string Code { get; set; }
-            public string Name { get; set; }
-            public override string ToString() { return Name; }
-        }
-
         private readonly PluginSettings settings;
-        private CheckBox enabledCheck, sameDestinationCheck, checkUpdatesCheck;
-        private TextBox sourceText, destinationText, templateText, updateNotes;
-        private Button destinationBrowseButton, checkNowButton, installButton, laterButton;
-        private ComboBox languageCombo;
+        private CheckBox enabledCheck, sameDestinationCheck;
+        private TextBox sourceText, destinationText, templateText;
+        private Button destinationBrowseButton;
+        private Roxyz.Act.UI.PluginTabs tabs;
+        private Roxyz.Act.UI.PluginLanguagePage languagePage;
+        private Roxyz.Act.UI.PluginUpdatePage updates;
+        private string hostedLanguage;
+        internal string Language { get { return hostedLanguage ?? settings.Language; } }
         private Label previewLabel, connectionValue, characterValue, placeValue, weatherValue, etValue, watcherValue;
-        private Label updateMessage, currentVersionValue, latestVersionValue, lastCheckedValue, authorVersionValue;
-        private LinkLabel repositoryLink;
         private ListBox historyList;
         private bool building;
         private bool uiInactive;
@@ -57,9 +52,8 @@ namespace SSRename
             target.UseScreenshotFolderAsDestination = sameDestinationCheck.Checked;
             target.DestinationFolder = destinationText.Text.Trim();
             target.FileNameTemplate = templateText.Text.Trim();
-            target.CheckUpdatesOnStartup = checkUpdatesCheck.Checked;
-            var choice = languageCombo.SelectedItem as LanguageChoice;
-            if (choice != null) target.Language = choice.Code;
+            if (updates != null) target.CheckUpdatesOnStartup = updates.CheckOnStartup;
+            if (hostedLanguage == null && languagePage != null) target.Language = languagePage.LanguageCode;
         }
 
         public void SetContext(ContextStatus status) { lastContext = status; SafeUi(ApplyContext); }
@@ -73,33 +67,44 @@ namespace SSRename
             SafeUi(delegate { history.Insert(0, DateTime.Now.ToString("HH:mm:ss") + "  " + Path.GetFileName(oldPath) + "  →  " + Path.GetFileName(newPath)); while (history.Count > 50) history.RemoveAt(history.Count - 1); RefreshHistory(); });
         }
         public void SetUpdateState(UpdateUiState state) { updateState = state; SafeUi(ApplyUpdateState); }
-        private string T(string key, params object[] args) { return Localization.T(settings.Language, key, args); }
+        private string T(string key, params object[] args) { return Localization.T(Language, key, args); }
 
         private void BuildUi()
         {
             building = true; SuspendLayout();
-            foreach (Control control in Controls) control.Dispose();
+            int selected = tabs == null ? 0 : tabs.SelectedIndex;
+            while (Controls.Count > 0) Controls[0].Dispose();
+            updates = null; languagePage = null;
             Controls.Clear();
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76f)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); Controls.Add(root);
             root.Controls.Add(BuildHeader(), 0, 0);
             var support = NewPage(T("tab_support"));
-            var tabs = new Roxyz.Act.UI.PluginTabs(support);
-            tabs.SetLanguageFont(settings.Language == Localization.ChineseSimplified ? "Microsoft YaHei UI" : settings.Language == Localization.Korean ? "Malgun Gothic" : settings.Language == Localization.Japanese ? "Yu Gothic UI" : "Segoe UI");
+            tabs = new Roxyz.Act.UI.PluginTabs(support);
+            tabs.SetLanguageFont(Language == Localization.ChineseSimplified ? "Microsoft YaHei UI" : Language == Localization.Korean ? "Malgun Gothic" : Language == Localization.Japanese ? "Yu Gothic UI" : "Segoe UI");
             root.Controls.Add(tabs, 0, 1);
-            var basic = NewPage(T("tab_basic")); var names = NewPage(T("tab_filename")); var status = NewPage(T("tab_status")); var updates = NewPage(T("tab_updates"));
-            tabs.TabPages.AddRange(new[] { basic, names, status, updates, support });
-            BuildBasicPage(basic); BuildNamePage(names); BuildStatusPage(status); BuildUpdatePage(updates); BuildSupportPage(support);
+            var basic = NewPage(T("tab_basic")); var names = NewPage(T("tab_filename")); var status = NewPage(T("tab_status"));
+            foreach (var page in new[] { basic, names, status }) tabs.AddContentPage(page);
+            BuildBasicPage(basic); BuildNamePage(names); BuildStatusPage(status);
+            if (hostedLanguage == null)
+            {
+                languagePage = new Roxyz.Act.UI.PluginLanguagePage(Language);
+                languagePage.LanguageChanged += delegate { RaiseSettingsChanged(); BuildUi(); };
+                updates = new Roxyz.Act.UI.PluginUpdatePage("ssrename", Assembly.GetExecutingAssembly().GetName().Version.ToString(3), settings.CheckUpdatesOnStartup, Language);
+                updates.CheckRequested += delegate { CheckUpdatesRequested?.Invoke(this, EventArgs.Empty); };
+                updates.InstallRequested += delegate { if (updateState?.Release != null) InstallUpdateRequested?.Invoke(updateState.Release); };
+                updates.LaterRequested += delegate { if (updateState?.Release != null) SkipUpdateRequested?.Invoke(updateState.Release); };
+                updates.StartupChanged += delegate { RaiseSettingsChanged(); };
+                tabs.AddContentPage(languagePage); tabs.AddContentPage(updates); BuildSupportPage(support); tabs.AddContentPage(support);
+            }
+            else support.Dispose();
+            tabs.SelectedIndex = Math.Max(0, Math.Min(selected, tabs.TabCount - 1));
             building = false; UpdateDestinationState(); UpdatePreview(); ApplyContext(); RefreshHistory(); ApplyUpdateState(); ResumeLayout(true);
         }
 
         private void BuildBasicPage(TabPage page)
         {
             var table = NewTable(); page.Controls.Add(table);
-            languageCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
-            foreach (var code in new[] { Localization.English, Localization.Japanese, Localization.ChineseSimplified, Localization.Korean }) languageCombo.Items.Add(new LanguageChoice { Code = code, Name = Localization.LanguageDisplayName(settings.Language, code) });
-            for (var i = 0; i < languageCombo.Items.Count; i++) if (((LanguageChoice)languageCombo.Items[i]).Code == Localization.Normalize(settings.Language)) languageCombo.SelectedIndex = i;
-            languageCombo.SelectedIndexChanged += OnLanguageChanged; AddRow(table, T("language"), languageCombo);
             enabledCheck = new CheckBox { Text = T("enable_rename"), AutoSize = true, Checked = settings.RenameEnabled }; AddWideRow(table, enabledCheck);
             sourceText = new TextBox { Text = settings.ScreenshotFolder, Dock = DockStyle.Fill }; AddRow(table, T("watch_folder"), MakePathEditor(sourceText, T("browse"), BrowseSource));
             sameDestinationCheck = new CheckBox { Text = T("same_destination"), AutoSize = true, Checked = settings.UseScreenshotFolderAsDestination }; AddRow(table, T("destination"), sameDestinationCheck);
@@ -107,7 +112,7 @@ namespace SSRename
             AddRow(table, T("folder_actions"), NewButton(T("open_destination"), OpenDestination)); AddWideRow(table, NewNote(T("basic_note")));
             enabledCheck.CheckedChanged += delegate { RaiseSettingsChanged(); }; sameDestinationCheck.CheckedChanged += delegate { UpdateDestinationState(); RaiseSettingsChanged(); };
             sourceText.TextChanged += delegate { RaiseSettingsChanged(); };
-            sourceText.Leave += delegate { RaiseSettingsChanged(); if (WatchFolderSettingsCommitted != null) WatchFolderSettingsCommitted(this, EventArgs.Empty); };
+            sourceText.Leave += delegate { if (building || uiInactive) return; RaiseSettingsChanged(); if (WatchFolderSettingsCommitted != null) WatchFolderSettingsCommitted(this, EventArgs.Empty); };
             destinationText.TextChanged += delegate { RaiseSettingsChanged(); };
             destinationText.Leave += delegate { RaiseSettingsChanged(); };
         }
@@ -128,34 +133,23 @@ namespace SSRename
             var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) }; panel.Controls.Add(new Label { Text = T("history"), Dock = DockStyle.Top, Height = 25, ForeColor = Color.FromArgb(45, 58, 77) }); historyList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, Font = new Font("Yu Gothic UI", 8.5f) }; panel.Controls.Add(historyList); historyList.BringToFront(); root.Controls.Add(panel, 0, 1);
         }
 
-        private void BuildUpdatePage(TabPage page)
-        {
-            var table = NewTable(); page.Controls.Add(table); AddWideRow(table, UpdateHeading(T("updates_heading")));
-            authorVersionValue = NewValue(T("author_version", "Roxyz0501", Assembly.GetExecutingAssembly().GetName().Version.ToString(3))); AddWideRow(table, authorVersionValue);
-            repositoryLink = new LinkLabel { Text = "https://github.com/Roxyz0501/ssrename", AutoSize = true, LinkColor = Color.FromArgb(47, 93, 145), ActiveLinkColor = Color.FromArgb(28, 65, 108), VisitedLinkColor = Color.FromArgb(76, 92, 117), Margin = new Padding(4, 4, 4, 8) };
-            repositoryLink.LinkClicked += delegate { try { Process.Start(new ProcessStartInfo("https://github.com/Roxyz0501/ssrename") { UseShellExecute = true }); } catch (Exception ex) { updateMessage.Text = T("update_link_failed", ex.GetBaseException().Message); updateMessage.ForeColor = Color.FromArgb(176, 65, 56); } };
-            AddWideRow(table, repositoryLink);
-            checkUpdatesCheck = new CheckBox { Text = T("check_startup"), AutoSize = true, Checked = settings.CheckUpdatesOnStartup }; AddWideRow(table, checkUpdatesCheck);
-            currentVersionValue = NewValue(Assembly.GetExecutingAssembly().GetName().Version.ToString(3)); latestVersionValue = NewValue("—"); lastCheckedValue = NewValue(string.IsNullOrWhiteSpace(settings.LastUpdateCheckUtc) ? "—" : settings.LastUpdateCheckUtc);
-            AddRow(table, T("current_version"), currentVersionValue); AddRow(table, T("latest_version"), latestVersionValue); AddRow(table, T("last_checked"), lastCheckedValue);
-            updateMessage = NewValue(""); AddWideRow(table, updateMessage); updateNotes = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 110, Dock = DockStyle.Fill, BackColor = Color.White }; AddRow(table, T("release_notes"), updateNotes);
-            var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false }; checkNowButton = NewButton(T("check_now"), delegate { if (CheckUpdatesRequested != null) CheckUpdatesRequested(this, EventArgs.Empty); }); installButton = NewAccentButton(T("update_button")); laterButton = NewButton(T("later_button"), delegate { if (updateState != null && SkipUpdateRequested != null) SkipUpdateRequested(updateState.Release); });
-            installButton.Click += delegate { if (updateState != null && InstallUpdateRequested != null) InstallUpdateRequested(updateState.Release); }; buttons.Controls.Add(checkNowButton); buttons.Controls.Add(installButton); buttons.Controls.Add(laterButton); AddWideRow(table, buttons); checkUpdatesCheck.CheckedChanged += delegate { RaiseSettingsChanged(); };
-        }
-
         private void BuildSupportPage(TabPage page)
         {
             var content = new TableLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 1, RowCount = 7, Padding = new Padding(28, 24, 28, 24), BackColor = Color.White }; content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f)); page.Controls.Add(content);
             content.Controls.Add(Heading(T("support_heading")), 0, 0); content.Controls.Add(new Panel { Height = 3, Width = 520, BackColor = Color.FromArgb(218, 145, 52), Margin = new Padding(0, 0, 0, 18) }, 0, 1); content.Controls.Add(SupportText(T("support_intro"), false), 0, 2);
             var voluntary = SupportText(T("support_voluntary"), true); voluntary.BackColor = Color.FromArgb(255, 248, 232); voluntary.Padding = new Padding(12, 10, 12, 10); content.Controls.Add(voluntary, 0, 3);
             var status = NewNote(T("support_click_only")); status.Margin = new Padding(0, 10, 0, 0); var button = NewAccentButton(T("support_button")); button.Width = 360; button.Height = 50; button.Font = new Font("Yu Gothic UI Semibold", 11f, FontStyle.Bold);
-            button.Click += delegate { string error; if (ExternalLinkService.TryOpenSupportPage(settings.Language, out error)) { status.Text = T("support_opened"); status.ForeColor = Color.FromArgb(17, 108, 75); } else { status.Text = error; status.ForeColor = Color.FromArgb(176, 65, 56); } };
+            button.Click += delegate { string error; if (ExternalLinkService.TryOpenSupportPage(Language, out error)) { status.Text = T("support_opened"); status.ForeColor = Color.FromArgb(17, 108, 75); } else { status.Text = error; status.ForeColor = Color.FromArgb(176, 65, 56); } };
             content.Controls.Add(button, 0, 4); content.Controls.Add(new Label { Text = ExternalLinkService.SupportUrl, AutoSize = true, Font = new Font("Segoe UI", 9f), ForeColor = Color.FromArgb(127, 82, 28), Margin = new Padding(2, 4, 0, 0) }, 0, 5); content.Controls.Add(status, 0, 6);
         }
 
-        private void OnLanguageChanged(object sender, EventArgs e)
+        internal void SetHostedLanguage(string code)
         {
-            if (building) return; ApplyTo(settings); settings.Language = ((LanguageChoice)languageCombo.SelectedItem).Code; RaiseSettingsChanged(); BuildUi();
+            var next = string.IsNullOrEmpty(code) ? null : Localization.Normalize(code);
+            if (hostedLanguage == next) return;
+            hostedLanguage = next;
+            lastWatcherMessage = null;
+            BuildUi();
         }
 
         private void ApplyContext()
@@ -167,8 +161,18 @@ namespace SSRename
 
         private void ApplyUpdateState()
         {
-            if (updateMessage == null) return; var state = updateState; currentVersionValue.Text = state == null || string.IsNullOrWhiteSpace(state.CurrentVersion) ? Assembly.GetExecutingAssembly().GetName().Version.ToString(3) : state.CurrentVersion; latestVersionValue.Text = state == null || string.IsNullOrWhiteSpace(state.LatestVersion) ? "—" : state.LatestVersion; lastCheckedValue.Text = state == null || string.IsNullOrWhiteSpace(state.LastChecked) ? (string.IsNullOrWhiteSpace(settings.LastUpdateCheckUtc) ? "—" : settings.LastUpdateCheckUtc) : state.LastChecked; updateNotes.Text = state == null ? string.Empty : state.Notes ?? string.Empty;
-            updateMessage.Text = state == null ? string.Empty : (state.Checking ? T("checking") : T(state.MessageKey ?? string.Empty, state.MessageArgs ?? new object[0])); updateMessage.ForeColor = state != null && state.IsError ? Color.FromArgb(176, 65, 56) : Color.FromArgb(17, 108, 75); checkNowButton.Enabled = state == null || !state.Checking; installButton.Enabled = state != null && !state.Checking && state.CanInstall; laterButton.Enabled = state != null && !state.Checking && state.CanSkip; installButton.Visible = state != null && state.CanInstall; laterButton.Visible = state != null && state.CanSkip;
+            if (updates == null) return;
+            var s = updateState;
+            var mode = s == null ? Roxyz.Act.UI.UpdatePageState.Ready :
+                s.MessageKey == "update_download" ? Roxyz.Act.UI.UpdatePageState.Preparing :
+                s.Checking ? Roxyz.Act.UI.UpdatePageState.Checking :
+                s.MessageKey == "update_ready" ? Roxyz.Act.UI.UpdatePageState.Prepared :
+                s.CanInstall ? (s.IsError ? Roxyz.Act.UI.UpdatePageState.PrepareFailed : Roxyz.Act.UI.UpdatePageState.Available) : Roxyz.Act.UI.UpdatePageState.Ready;
+            var message = s == null ? "" : T(s.MessageKey ?? "checking", s.MessageArgs ?? new object[0]);
+            if (s != null && s.CanInstall)
+                message += Environment.NewLine + s.CurrentVersion + " → " + s.LatestVersion + Environment.NewLine +
+                    (s.MessageKey == "update_available_rate_limited" ? T("update_notes_rate_limited") : s.Notes);
+            updates.ShowState(mode, message);
         }
 
         private void RefreshHistory() { if (historyList == null) return; historyList.Items.Clear(); foreach (var item in history) historyList.Items.Add(item); }

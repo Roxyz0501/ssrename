@@ -17,8 +17,10 @@ namespace SSRename.Tests
     {
         private static int failures;
 
+        [STAThread]
         private static int Main()
         {
+            Run("standalone and portal language, tabs, update events and drawing", TestPluginTabs);
             Run("CSV quoted fields", TestCsv);
             Run("game data and weather", TestGameData);
             Run("file name format", TestFileName);
@@ -47,6 +49,59 @@ namespace SSRename.Tests
             Run("watcher stop waits and preserves source", TestWatcherStop);
             Console.WriteLine(failures == 0 ? "All SSRename tests passed." : failures + " test(s) failed.");
             return failures == 0 ? 0 : 1;
+        }
+
+        private static T Field<T>(object target, string name)
+        {
+            return (T)target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(target);
+        }
+
+        private static void TestPluginTabs()
+        {
+            var settings = new PluginSettings { Language = "ja" };
+            using (var view = new SettingsControl(settings))
+            {
+                view.SettingsChanged += delegate { view.ApplyTo(settings); };
+                foreach (var code in new[] { "ko", "zh-CN", "en", "ja", "ja" })
+                {
+                    var language = Field<Roxyz.Act.UI.PluginLanguagePage>(view, "languagePage");
+                    Field<System.Windows.Forms.ComboBox>(language, "selector").SelectedIndex = Array.IndexOf(Roxyz.Act.UI.PluginLanguagePage.Codes, code);
+                    Equal(code, settings.Language);
+                }
+                var tabs = Field<Roxyz.Act.UI.PluginTabs>(view, "tabs");
+                var support = tabs.TabPages[tabs.TabCount - 1];
+                tabs.AddContentPage(new System.Windows.Forms.TabPage("Extra"));
+                True(tabs.TabPages[tabs.TabCount - 1] == support, "support moved");
+                var updates = Field<Roxyz.Act.UI.PluginUpdatePage>(view, "updates");
+                var release = new ReleaseInfo();
+                int events = 0;
+                view.CheckUpdatesRequested += delegate { events++; };
+                view.InstallUpdateRequested += value => { True(value == release, "wrong release"); events++; };
+                view.SkipUpdateRequested += value => { True(value == release, "wrong skip"); events++; };
+                view.SetUpdateState(new UpdateUiState { CanInstall = true, CanSkip = true, Release = release, CurrentVersion = "1.0.3", LatestVersion = "1.0.5", Notes = "notes", MessageKey = "update_available" });
+                tabs.SelectedTab = updates;
+                foreach (var name in new[] { "checkNow", "updateNow", "later" })
+                    Field<System.Windows.Forms.Button>(updates, name).PerformClick();
+                Equal(3, events);
+                foreach (var code in new[] { "en", "en", "ko", "zh-CN", "ja", "en" })
+                {
+                    updates.SetLanguage(code);
+                    updates.Size = new System.Drawing.Size(360,440);
+                    using (var bitmap = new System.Drawing.Bitmap(updates.Width, updates.Height))
+                        updates.DrawToBitmap(bitmap, updates.ClientRectangle);
+                }
+                foreach (var code in new[] { "en", "en", "ko", "zh-CN", "ja", "en" })
+                {
+                    view.SetHostedLanguage(code);
+                    Equal(code, view.Language);
+                    Equal(3, Field<Roxyz.Act.UI.PluginTabs>(view, "tabs").TabCount);
+                    view.ApplyTo(settings); Equal("ja", settings.Language);
+                    view.SetHostedLanguage(code);
+                }
+                view.SetHostedLanguage(null);
+                Equal("ja", view.Language);
+                Equal(6, Field<Roxyz.Act.UI.PluginTabs>(view, "tabs").TabCount);
+            }
         }
 
         private static void TestCsv()
@@ -433,7 +488,7 @@ namespace SSRename.Tests
             var root = NewTemporaryRoot();
             try
             {
-                SemVersion version; True(SemVersion.TryParse("1.0.4", out version), "test SemVer failed");
+                SemVersion version; True(SemVersion.TryParse(AssemblyName.GetAssemblyName(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../../dist/SSRename.dll")).Version.ToString(3), out version), "test SemVer failed");
                 var packageHash = new string('b', 64);
                 Equal(UpdatePackageService.CreateStageKey(version, packageHash), UpdatePackageService.CreateStageKey(version, packageHash));
 

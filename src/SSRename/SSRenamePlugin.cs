@@ -33,9 +33,37 @@ namespace SSRename
         private volatile bool updateAvailable;
         private string lastSettingsSaveError;
         private int shuttingDown;
+        private volatile string hostedLanguage;
+        public void SetHostedLanguage(string code)
+        {
+            if (control == null || Volatile.Read(ref shuttingDown) != 0) return;
+            var next = string.IsNullOrWhiteSpace(code) ? null : Localization.Normalize(code);
+            if (next == hostedLanguage) return;
+            hostedLanguage = next;
+            control.SetHostedLanguage(next);
+            RefreshRuntimeLanguage();
+        }
+
+        private void RefreshRuntimeLanguage()
+        {
+            var snapshot = RuntimeSettings();
+            pluginPage.Text = Localization.T(snapshot.Language, "title");
+            screenshotWatcher.UpdateSettings(snapshot);
+            screenshotWatcher.ReplayStatus();
+            OnContextTick(null, EventArgs.Empty);
+        }
+
+        private PluginSettings RuntimeSettings()
+        {
+            var snapshot = SnapshotSettings();
+            if (hostedLanguage != null) snapshot.Language = hostedLanguage;
+            return snapshot;
+        }
 
         public void InitPlugin(TabPage pluginScreenSpace, Label pluginStatusText)
         {
+            hostedLanguage = null;
+            Interlocked.Exchange(ref shuttingDown, 0);
             actStatus = pluginStatusText;
             pluginPage = pluginScreenSpace;
             settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Advanced Combat Tracker", "Config", "SSRename.config.xml");
@@ -134,6 +162,7 @@ namespace SSRename
             }
             else if (actStatus != null)
                 actStatus.Text = "SSRename: " + Localization.T(settings == null ? Localization.English : settings.Language, "stopped");
+            control?.Dispose(); control = null; hostedLanguage = null;
         }
 
         private PluginSettings SnapshotSettings()
@@ -147,7 +176,7 @@ namespace SSRename
             if (Volatile.Read(ref shuttingDown) != 0) return;
             PostUi(delegate
             {
-                var language = SnapshotSettings();
+                var language = RuntimeSettings();
                 if (actStatus != null && language != null)
                     actStatus.Text = "SSRename: " + Localization.T(language.Language, "settings_save_failed", exception.GetBaseException().Message);
             });
@@ -156,7 +185,7 @@ namespace SSRename
         private void OnContextTick(object sender, EventArgs e)
         {
             if (Volatile.Read(ref shuttingDown) != 0 || contextProvider == null) return;
-            var snapshot = SnapshotSettings();
+            var snapshot = RuntimeSettings();
             var status = contextProvider.Read(snapshot.Language);
             latestContext = status.Context == null ? null : status.Context.Clone();
             if (control != null) control.SetContext(status);
@@ -173,11 +202,11 @@ namespace SSRename
                 control.ApplyTo(settings);
                 current = settings.Clone();
             }
-            if (pluginPage != null) pluginPage.Text = Localization.T(current.Language, "title");
+            if (pluginPage != null) pluginPage.Text = Localization.T(hostedLanguage ?? current.Language, "title");
             if (previous.RenameEnabled != current.RenameEnabled)
                 RestartWatcher();
-            else
-                screenshotWatcher.UpdateSettings(current);
+            else if (previous.Language != current.Language) RefreshRuntimeLanguage();
+            else screenshotWatcher.UpdateSettings(RuntimeSettings());
         }
 
         private void OnWatchFolderSettingsCommitted(object sender, EventArgs e)
@@ -188,7 +217,7 @@ namespace SSRename
         private void RestartWatcher()
         {
             if (Volatile.Read(ref shuttingDown) != 0 || screenshotWatcher == null) return;
-            var snapshot = SnapshotSettings();
+            var snapshot = RuntimeSettings();
             screenshotWatcher.Restart(snapshot, delegate
             {
                 var value = latestContext;
@@ -206,7 +235,7 @@ namespace SSRename
         private void OnWatcherStatus(string message, bool isError)
         {
             if (Volatile.Read(ref shuttingDown) != 0) return;
-            var snapshot = SnapshotSettings();
+            var snapshot = RuntimeSettings();
             if (control != null) control.SetWatcherStatus(message, isError);
             PostUi(delegate
             {
@@ -260,14 +289,14 @@ namespace SSRename
             if (client == null || cancellation == null || currentVersion == null) return;
             var initial = new UpdateUiState { Checking = true, CurrentVersion = currentVersion.ToString() };
             PostUi(delegate { if (control != null) control.SetUpdateState(initial); });
-            var snapshot = SnapshotSettings();
+            var snapshot = RuntimeSettings();
             UpdateCheckResult result;
             try { result = await client.CheckAsync(currentVersion, manual ? null : snapshot.SkippedVersion, cancellation.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             if (Volatile.Read(ref shuttingDown) != 0 || cancellation.IsCancellationRequested) return;
             var checkedAt = result.CheckedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
             lock (settingsSync) settings.LastUpdateCheckUtc = checkedAt;
-            snapshot = SnapshotSettings();
+            snapshot = RuntimeSettings();
             var state = new UpdateUiState
             {
                 CurrentVersion = currentVersion.ToString(),
@@ -290,7 +319,7 @@ namespace SSRename
             {
                 if (control != null) control.SetUpdateState(state);
                 if ((state.MessageKey == "update_available" || state.MessageKey == "update_available_rate_limited") && actStatus != null)
-                    actStatus.Text = "SSRename: " + Localization.T(snapshot.Language, state.MessageKey) + "  " + currentVersion + " → " + state.LatestVersion;
+                    actStatus.Text = "SSRename: " + Localization.T(RuntimeSettings().Language, state.MessageKey) + "  " + currentVersion + " → " + state.LatestVersion;
             });
         }
 
@@ -303,7 +332,7 @@ namespace SSRename
         private async Task PrepareUpdateAsync(ReleaseInfo release)
         {
             var cancellation = updateCancellation;
-            var language = SnapshotSettings().Language;
+            
             PostUi(delegate
             {
                 if (control != null) control.SetUpdateState(new UpdateUiState { Checking = true, CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_download", Release = release });
@@ -328,17 +357,17 @@ namespace SSRename
                         }
                         updateAvailable = false;
                         if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_ready", Release = release });
-                        if (actStatus != null) actStatus.Text = "SSRename: " + Localization.T(language, "update_ready");
+                        if (actStatus != null) actStatus.Text = "SSRename: " + Localization.T(RuntimeSettings().Language, "update_ready");
                     }
                     catch (Exception ex)
                     {
-                        var error = Localization.T(language, "update_failed", ex.GetBaseException().Message);
+                        var error = Localization.T(RuntimeSettings().Language, "update_failed", ex.GetBaseException().Message);
                         if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_failed", MessageArgs = new object[] { ex.GetBaseException().Message }, IsError = true, CanInstall = true, CanSkip = true, Release = release });
                         if (actStatus != null) actStatus.Text = "SSRename: " + error;
                     }
                 });
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 if (Volatile.Read(ref shuttingDown) == 0)
@@ -376,7 +405,7 @@ namespace SSRename
             if (release == null || release.Version == null || Volatile.Read(ref shuttingDown) != 0) return;
             lock (settingsSync) settings.SkippedVersion = release.Version.ToString();
             updateAvailable = false;
-            var snapshot = SnapshotSettings();
+            var snapshot = RuntimeSettings();
             if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_skipped", MessageArgs = new object[] { release.Version.ToString() }, Release = release });
         }
 
