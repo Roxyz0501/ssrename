@@ -3,8 +3,13 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Http;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace SSRename.Tests
 {
@@ -23,12 +28,18 @@ namespace SSRename.Tests
             Run("OS language mapping and fallback", TestLocalization);
             Run("SemVer comparison", TestSemVersion);
             Run("GitHub stable release parsing", TestReleaseParsing);
+            Run("latest release HEAD avoids REST when current", TestLatestReleaseHead);
+            Run("rate-limited release uses pinned tag assets without retries", TestRateLimitedReleaseFallback);
+            Run("latest release redirect rejects another repository", TestLatestReleaseRedirectValidation);
+            Run("release API rejects mismatched tag and asset origin", TestReleaseApiValidation);
             Run("SHA-256 verification", TestHashVerification);
             Run("ZIP destination validation", TestZipPaths);
             Run("corrupt update asset rejection", TestCorruptAsset);
             Run("update ZIP duplicate and metadata limits", TestUpdateZipLimits);
             Run("update ZIP required SHA and cancellation", TestUpdateZipShaAndCancellation);
             Run("update stage reuse, expiry, and cap", TestUpdateStageRetention);
+            Run("updater backup and rollback", TestUpdaterRollback);
+            Run("built release ZIP integration", TestBuiltReleasePackage);
             Run("legacy Config language initialization", TestLegacyConfig);
             Run("settings no-op and fixed cadence", TestSettingsCadence);
             Run("settings final flush and reload", TestSettingsFinalFlush);
@@ -146,6 +157,9 @@ namespace SSRename.Tests
             Equal("Support", Localization.T(Localization.English, "tab_support"));
             Equal("支持", Localization.T(Localization.ChineseSimplified, "tab_support"));
             Equal("후원", Localization.T(Localization.Korean, "tab_support"));
+            True(Localization.T(Localization.Japanese, "update_rate_limited").Contains("制限中"), "Japanese rate-limit text missing");
+            True(Localization.T(Localization.ChineseSimplified, "update_rate_limited").Contains("限制"), "Chinese rate-limit text missing");
+            True(Localization.T(Localization.Korean, "update_rate_limited").Contains("제한"), "Korean rate-limit text missing");
         }
 
         private static void TestSemVersion()
@@ -171,6 +185,120 @@ namespace SSRename.Tests
             Equal("notes", release.Body);
             try { GitHubReleaseParser.ParseLatestStable("{bad json}"); throw new InvalidOperationException("invalid JSON was accepted"); }
             catch (Exception ex) { True(!(ex is InvalidOperationException) || ex.Message != "invalid JSON was accepted", "invalid JSON was accepted"); }
+        }
+
+        private static void TestLatestReleaseHead()
+        {
+            var handler = new FakeHttpHandler(delegate(HttpRequestMessage request)
+            {
+                if (request.Method == HttpMethod.Head && request.RequestUri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+                {
+                    var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+                    redirect.Headers.Location = new Uri("https://github.com/Roxyz0501/ssrename/releases/tag/v1.0.4");
+                    return redirect;
+                }
+                if (request.Method == HttpMethod.Head && request.RequestUri.AbsolutePath.EndsWith("/v1.0.4", StringComparison.Ordinal))
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                throw new InvalidOperationException("Same-version check unexpectedly requested the REST API.");
+            });
+            using (var client = new GitHubUpdateClient(handler))
+            {
+                SemVersion current; SemVersion.TryParse("1.0.4", out current);
+                var result = client.CheckAsync(current, null, CancellationToken.None).GetAwaiter().GetResult();
+                Equal(UpdateCheckStatus.UpToDate, result.Status);
+                Equal(0, handler.RestRequests);
+                Equal(2, handler.Requests);
+            }
+        }
+
+        private static void TestRateLimitedReleaseFallback()
+        {
+            foreach (var limitStatus in new[] { HttpStatusCode.Forbidden, (HttpStatusCode)429 })
+            {
+                var handler = new FakeHttpHandler(delegate(HttpRequestMessage request)
+                {
+                    if (request.Method == HttpMethod.Head && request.RequestUri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+                    {
+                        var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+                        redirect.Headers.Location = new Uri("https://github.com/Roxyz0501/ssrename/releases/tag/v1.0.5");
+                        return redirect;
+                    }
+                    if (request.Method == HttpMethod.Head) return new HttpResponseMessage(HttpStatusCode.OK);
+                    return new HttpResponseMessage(limitStatus);
+                });
+                using (var client = new GitHubUpdateClient(handler))
+                {
+                    SemVersion current; SemVersion.TryParse("1.0.4", out current);
+                    var result = client.CheckAsync(current, null, CancellationToken.None).GetAwaiter().GetResult();
+                    Equal(UpdateCheckStatus.AvailableRateLimited, result.Status);
+                    Equal("1.0.5", result.Release.Version.ToString());
+                    Equal("SSRename-1.0.5.zip", result.Release.Assets[0].Name);
+                    Equal("SHA256SUMS.txt", result.Release.Assets[1].Name);
+                    True(result.Release.Assets[0].DownloadUrl.StartsWith("https://github.com/Roxyz0501/ssrename/releases/download/v1.0.5/", StringComparison.Ordinal), "fallback asset was not tag-pinned");
+                    Equal(1, handler.RestRequests);
+                    Equal(3, handler.Requests);
+                }
+            }
+        }
+
+        private static void TestLatestReleaseRedirectValidation()
+        {
+            var handler = new FakeHttpHandler(delegate(HttpRequestMessage request)
+            {
+                var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+                redirect.Headers.Location = new Uri("https://github.com/someone-else/ssrename/releases/tag/v9.9.9");
+                return redirect;
+            });
+            using (var client = new GitHubUpdateClient(handler))
+            {
+                SemVersion current; SemVersion.TryParse("1.0.4", out current);
+                var result = client.CheckAsync(current, null, CancellationToken.None).GetAwaiter().GetResult();
+                Equal(UpdateCheckStatus.Failed, result.Status);
+                Equal(0, handler.RestRequests);
+            }
+        }
+
+        private static void TestReleaseApiValidation()
+        {
+            var responses = new[]
+            {
+                "{\"tag_name\":\"v1.0.6\",\"name\":\"wrong tag\",\"body\":\"\",\"draft\":false,\"prerelease\":false,\"assets\":[]}",
+                "{\"tag_name\":\"v1.0.5\",\"name\":\"bad asset\",\"body\":\"\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"SSRename-1.0.5.zip\",\"browser_download_url\":\"https://github.com/someone-else/ssrename/releases/download/v1.0.5/SSRename-1.0.5.zip\",\"size\":10},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"https://github.com/Roxyz0501/ssrename/releases/download/v1.0.5/SHA256SUMS.txt\",\"size\":10}]}"
+            };
+            foreach (var json in responses)
+            {
+                var handler = new FakeHttpHandler(delegate(HttpRequestMessage request)
+                {
+                    if (request.Method == HttpMethod.Head && request.RequestUri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+                    {
+                        var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+                        redirect.Headers.Location = new Uri("https://github.com/Roxyz0501/ssrename/releases/tag/v1.0.5");
+                        return redirect;
+                    }
+                    if (request.Method == HttpMethod.Head) return new HttpResponseMessage(HttpStatusCode.OK);
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+                });
+                using (var client = new GitHubUpdateClient(handler))
+                {
+                    SemVersion current; SemVersion.TryParse("1.0.4", out current);
+                    Equal(UpdateCheckStatus.Failed, client.CheckAsync(current, null, CancellationToken.None).GetAwaiter().GetResult().Status);
+                    Equal(1, handler.RestRequests);
+                }
+            }
+        }
+
+        private sealed class FakeHttpHandler : HttpMessageHandler
+        {
+            private readonly Func<HttpRequestMessage, HttpResponseMessage> responder;
+            public int Requests { get; private set; }
+            public int RestRequests { get; private set; }
+            public FakeHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) { this.responder = responder; }
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Requests++;
+                if (request.RequestUri.Host == "api.github.com") RestRequests++;
+                return Task.FromResult(responder(request));
+            }
         }
 
         private static void TestHashVerification()
@@ -285,9 +413,9 @@ namespace SSRename.Tests
                 {
                     UpdatePackageValidator.ValidateAndExtract(zip, Path.Combine(root, "no-hash"), null, null, CancellationToken.None);
                 }, "missing package SHA-256 was accepted");
-                Throws<InvalidDataException>(delegate { UpdatePackageService.GetRequiredPackageHash("", "SSRename-1.0.3.zip"); }, "missing manifest entry was accepted");
+                Throws<InvalidDataException>(delegate { UpdatePackageService.GetRequiredPackageHash("", "SSRename-1.0.4.zip"); }, "missing manifest entry was accepted");
                 var validHash = new string('a', 64);
-                Equal(validHash, UpdatePackageService.GetRequiredPackageHash(validHash + "  SSRename-1.0.3.zip\n", "SSRename-1.0.3.zip"));
+                Equal(validHash, UpdatePackageService.GetRequiredPackageHash(validHash + "  SSRename-1.0.4.zip\n", "SSRename-1.0.4.zip"));
 
                 var source = new CancellationTokenSource(); source.Cancel();
                 Throws<OperationCanceledException>(delegate
@@ -305,7 +433,7 @@ namespace SSRename.Tests
             var root = NewTemporaryRoot();
             try
             {
-                SemVersion version; True(SemVersion.TryParse("1.0.3", out version), "test SemVer failed");
+                SemVersion version; True(SemVersion.TryParse("1.0.4", out version), "test SemVer failed");
                 var packageHash = new string('b', 64);
                 Equal(UpdatePackageService.CreateStageKey(version, packageHash), UpdatePackageService.CreateStageKey(version, packageHash));
 
@@ -319,11 +447,11 @@ namespace SSRename.Tests
                 True(!UpdatePackageService.IsReusableStage(stage, version), "tampered staged DLL was reusable");
 
                 var now = DateTime.UtcNow;
-                var keep = "1.0.3-aaaaaaaaaaaa";
-                foreach (var name in new[] { keep, "1.0.1-bbbbbbbbbbbb", "1.0.0-cccccccccccc", "0.9.9-dddddddddddd" })
+                var keep = "1.0.4-aaaaaaaaaaaa";
+                foreach (var name in new[] { keep, "1.0.2-bbbbbbbbbbbb", "1.0.1-cccccccccccc", "0.9.9-dddddddddddd" })
                 {
                     var path = Path.Combine(root, name); Directory.CreateDirectory(path); File.WriteAllText(Path.Combine(path, "marker"), "x");
-                    Directory.SetLastWriteTimeUtc(path, now.AddHours(-Array.IndexOf(new[] { keep, "1.0.1-bbbbbbbbbbbb", "1.0.0-cccccccccccc", "0.9.9-dddddddddddd" }, name)));
+                    Directory.SetLastWriteTimeUtc(path, now.AddHours(-Array.IndexOf(new[] { keep, "1.0.2-bbbbbbbbbbbb", "1.0.1-cccccccccccc", "0.9.9-dddddddddddd" }, name)));
                 }
                 var expired = Path.Combine(root, "0.1.0-eeeeeeeeeeee"); Directory.CreateDirectory(expired); Directory.SetLastWriteTimeUtc(expired, now.AddDays(-15));
                 var unrelated = Path.Combine(root, "user-data"); Directory.CreateDirectory(unrelated);
@@ -337,6 +465,63 @@ namespace SSRename.Tests
                 True(Directory.Exists(unrelated), "unrecognized user data directory was touched");
             }
             finally { Directory.Delete(root, true); }
+        }
+
+        private static void TestUpdaterRollback()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "SSRename-updater-test-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var target = Path.Combine(root, "SSRename.dll");
+                var sourceRoot = Path.Combine(root, "stage"); Directory.CreateDirectory(sourceRoot);
+                var source = Path.Combine(sourceRoot, "SSRename.dll");
+                File.WriteAllText(target, "original"); File.WriteAllText(source, "replacement");
+                var hash = HashVerifier.ComputeSha256(source);
+                SSRename.Updater.Program.ReplaceWithBackup(source, target, hash, "1.0.4");
+                Equal("replacement", File.ReadAllText(target));
+                True(Directory.GetFiles(root, "SSRename.dll.backup-1.0.4-*").Length == 1, "successful update did not retain the backup");
+                File.WriteAllText(target, "original-again");
+                Throws<IOException>(delegate
+                {
+                    SSRename.Updater.Program.ReplaceWithBackup(source, target, hash, "1.0.4", delegate(string incoming, string destination)
+                    {
+                        File.WriteAllText(destination, "partial-corruption");
+                        throw new IOException("simulated replace failure");
+                    });
+                }, "simulated replacement failure was ignored");
+                Equal("original-again", File.ReadAllText(target));
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
+        private static void TestBuiltReleasePackage()
+        {
+            var root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", ".."));
+            var pluginDll = Path.Combine(root, "dist", "SSRename.dll");
+            var pluginVersion = AssemblyName.GetAssemblyName(pluginDll).Version;
+            var versionText = pluginVersion.Major + "." + pluginVersion.Minor + "." + pluginVersion.Build;
+            var packageName = "SSRename-" + versionText + ".zip";
+            var zip = Path.Combine(root, "release", packageName);
+            if (!File.Exists(zip)) return;
+
+            var manifest = File.ReadAllText(Path.Combine(root, "release", "SHA256SUMS.txt"));
+            var expectedHash = UpdatePackageService.GetRequiredPackageHash(manifest, packageName);
+            True(HashVerifier.VerifySha256(zip, expectedHash), "local release ZIP did not match its SHA-256 manifest");
+            var extract = Path.Combine(NewTemporaryRoot(), "validated-release");
+            try
+            {
+                SemVersion expectedVersion; True(SemVersion.TryParse(versionText, out expectedVersion), "local release version was invalid");
+                UpdatePackageValidator.ValidateAndExtract(zip, extract, expectedVersion, expectedHash, CancellationToken.None);
+                var updater = Path.Combine(extract, "SSRename.Updater.exe");
+                True(File.Exists(updater), "release ZIP did not contain the post-exit updater");
+                var updaterName = AssemblyName.GetAssemblyName(updater);
+                Equal("SSRename.Updater", updaterName.Name);
+                Equal(versionText, updaterName.Version.Major + "." + updaterName.Version.Minor + "." + updaterName.Version.Build);
+                var company = Assembly.ReflectionOnlyLoadFrom(updater).GetCustomAttributesData().FirstOrDefault(attribute => attribute.AttributeType.FullName == "System.Reflection.AssemblyCompanyAttribute");
+                True(company != null && company.ConstructorArguments.Count == 1 && string.Equals(company.ConstructorArguments[0].Value as string, "Roxyz0501", StringComparison.Ordinal), "release updater company identity was invalid");
+            }
+            finally { var extractionRoot = Path.GetDirectoryName(extract); try { Directory.Delete(extractionRoot, true); } catch { } }
         }
 
         private static void CreateZip(string path, IEnumerable<string> entryNames)

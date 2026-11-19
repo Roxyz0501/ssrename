@@ -19,7 +19,7 @@ namespace SSRename
         internal static readonly TimeSpan StageRetention = TimeSpan.FromDays(14);
         private static readonly SemaphoreSlim stagingLock = new SemaphoreSlim(1, 1);
 
-        public async Task<string> PrepareAsync(ReleaseInfo release, CancellationToken cancellationToken)
+        public async Task<PreparedUpdate> PrepareAsync(ReleaseInfo release, CancellationToken cancellationToken)
         {
             if (release == null || release.Version == null) throw new InvalidOperationException("Release information is missing.");
             var package = release.Assets.FirstOrDefault(asset =>
@@ -29,10 +29,12 @@ namespace SSRename
             if (!string.Equals(package.Name, "SSRename-" + release.Version + ".zip", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The release package name does not match its version.");
             if (package.Size <= 0 || package.Size > MaximumPackageBytes) throw new InvalidDataException("The release package size is invalid.");
+            if (!IsExpectedAssetUri(package.DownloadUrl, release.Version, package.Name)) throw new InvalidDataException("The package URL is not the expected asset for this repository and version.");
             var manifest = release.Assets.FirstOrDefault(asset =>
                 string.Equals(asset.Name, "SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase));
             if (manifest == null || manifest.Size <= 0 || manifest.Size > MaximumManifestBytes)
                 throw new InvalidDataException("A valid SHA256SUMS.txt release asset is required.");
+            if (!IsExpectedAssetUri(manifest.DownloadUrl, release.Version, manifest.Name)) throw new InvalidDataException("The manifest URL is not the expected asset for this repository and version.");
 
             await stagingLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             var updatesRoot = Path.Combine(Path.GetTempPath(), "SSRename", "updates");
@@ -52,11 +54,12 @@ namespace SSRename
                 var stageKey = CreateStageKey(release.Version, expectedHash);
                 var stageDirectory = Path.Combine(updatesRoot, stageKey);
                 var stagedDllPath = Path.Combine(stageDirectory, "SSRename.dll");
-                if (IsReusableStage(stageDirectory, release.Version))
+                var stagedUpdaterPath = Path.Combine(stageDirectory, "SSRename.Updater.exe");
+                if (IsReusableStage(stageDirectory, release.Version) && IsReusableUpdater(stageDirectory, release.Version))
                 {
                     Directory.SetLastWriteTimeUtc(stageDirectory, DateTime.UtcNow);
                     CleanupStagingDirectories(updatesRoot, stageKey, DateTime.UtcNow);
-                    return stagedDllPath;
+                    return new PreparedUpdate { StagedDllPath = stagedDllPath, StagedUpdaterPath = stagedUpdaterPath, DllSha256 = HashVerifier.ComputeSha256(stagedDllPath), UpdaterSha256 = HashVerifier.ComputeSha256(stagedUpdaterPath), Release = release };
                 }
 
                 if (Directory.Exists(stageDirectory)) DeleteOwnedDirectory(stageDirectory);
@@ -64,6 +67,8 @@ namespace SSRename
                 await DownloadAsync(package.DownloadUrl, packagePath, MaximumPackageBytes, cancellationToken).ConfigureAwait(false);
                 var extracted = Path.Combine(attemptRoot, "validated");
                 var validatedDll = UpdatePackageValidator.ValidateAndExtract(packagePath, extracted, release.Version, expectedHash, cancellationToken);
+                var validatedUpdater = Path.Combine(extracted, "SSRename.Updater.exe");
+                ValidateUpdaterAssembly(validatedUpdater, release.Version);
                 cancellationToken.ThrowIfCancellationRequested();
 
                 Directory.CreateDirectory(stageDirectory);
@@ -71,6 +76,8 @@ namespace SSRename
                 {
                     CopyFileCancellable(validatedDll, stagedDllPath, cancellationToken);
                     File.WriteAllText(Path.Combine(stageDirectory, "SSRename.dll.sha256"), HashVerifier.ComputeSha256(stagedDllPath), Encoding.ASCII);
+                    CopyFileCancellable(validatedUpdater, stagedUpdaterPath, cancellationToken);
+                    File.WriteAllText(Path.Combine(stageDirectory, "SSRename.Updater.exe.sha256"), HashVerifier.ComputeSha256(stagedUpdaterPath), Encoding.ASCII);
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch
@@ -80,7 +87,7 @@ namespace SSRename
                 }
 
                 CleanupStagingDirectories(updatesRoot, stageKey, DateTime.UtcNow);
-                return stagedDllPath;
+                return new PreparedUpdate { StagedDllPath = stagedDllPath, StagedUpdaterPath = stagedUpdaterPath, DllSha256 = HashVerifier.ComputeSha256(stagedDllPath), UpdaterSha256 = HashVerifier.ComputeSha256(stagedUpdaterPath), Release = release };
             }
             catch
             {
@@ -92,6 +99,37 @@ namespace SSRename
                     try { Directory.Delete(attemptRoot, true); } catch { }
                 stagingLock.Release();
             }
+        }
+
+        private static void ValidateUpdaterAssembly(string path, SemVersion expectedVersion)
+        {
+            if (!File.Exists(path)) throw new InvalidDataException("SSRename.Updater.exe is missing from the verified release package.");
+            var name = AssemblyName.GetAssemblyName(path);
+            if (!string.Equals(name.Name, "SSRename.Updater", StringComparison.Ordinal) || name.Version == null)
+                throw new InvalidDataException("The package contains an unexpected updater assembly.");
+            var versionText = name.Version.Major + "." + name.Version.Minor + "." + name.Version.Build;
+            SemVersion version;
+            if (!SemVersion.TryParse(versionText, out version) || version.CompareTo(expectedVersion) != 0)
+                throw new InvalidDataException("Updater version does not match the release tag.");
+            var assembly = Assembly.ReflectionOnlyLoadFrom(path);
+            var company = assembly.GetCustomAttributesData().FirstOrDefault(attribute => attribute.AttributeType.FullName == "System.Reflection.AssemblyCompanyAttribute");
+            if (company == null || company.ConstructorArguments.Count != 1 || !string.Equals(company.ConstructorArguments[0].Value as string, "Roxyz0501", StringComparison.Ordinal))
+                throw new InvalidDataException("The updater company metadata is invalid.");
+        }
+
+        private static bool IsReusableUpdater(string stageDirectory, SemVersion expectedVersion)
+        {
+            try
+            {
+                var path = Path.Combine(stageDirectory, "SSRename.Updater.exe");
+                var marker = path + ".sha256";
+                if (!File.Exists(path) || !File.Exists(marker) || IsReparsePoint(path) || IsReparsePoint(marker)) return false;
+                var hash = File.ReadAllText(marker, Encoding.ASCII).Trim();
+                if (!UpdatePackageValidator.IsValidSha256(hash) || !HashVerifier.VerifySha256(path, hash)) return false;
+                ValidateUpdaterAssembly(path, expectedVersion);
+                return true;
+            }
+            catch { return false; }
         }
 
         internal static string CreateStageKey(SemVersion version, string packageHash)
@@ -218,6 +256,7 @@ namespace SSRename
             Uri current;
             if (!Uri.TryCreate(url, UriKind.Absolute, out current) || !IsAllowedGitHubUri(current))
                 throw new InvalidDataException("The asset URL is not an allowed GitHub HTTPS URL.");
+            var originalAssetUri = current;
             using (var handler = new HttpClientHandler { AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate })
             using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) })
             {
@@ -231,7 +270,7 @@ namespace SSRename
                             var location = response.Headers.Location;
                             if (location == null) throw new HttpRequestException("GitHub redirect has no destination.");
                             current = location.IsAbsoluteUri ? location : new Uri(current, location);
-                            if (!IsAllowedGitHubUri(current)) throw new InvalidDataException("GitHub redirected to an untrusted host.");
+                            if (!IsAllowedDownloadRedirect(current, originalAssetUri)) throw new InvalidDataException("GitHub redirected to an untrusted host or asset path.");
                             continue;
                         }
                         response.EnsureSuccessStatusCode();
@@ -261,8 +300,25 @@ namespace SSRename
         {
             if (uri == null || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
             var host = uri.Host.ToLowerInvariant();
-            return host == "github.com" || host == "api.github.com" || host == "release-assets.githubusercontent.com" ||
-                host == "objects.githubusercontent.com" || host.EndsWith(".githubusercontent.com", StringComparison.Ordinal);
+            return host == "github.com";
+        }
+
+        private static bool IsAllowedDownloadRedirect(Uri uri, Uri originalAssetUri)
+        {
+            if (uri == null || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
+            if (string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+                return originalAssetUri != null && string.Equals(uri.AbsolutePath, originalAssetUri.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(uri.Host, "release-assets.githubusercontent.com", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(uri.Host, "objects.githubusercontent.com", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsExpectedAssetUri(string value, SemVersion version, string assetName)
+        {
+            Uri uri;
+            if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment)) return false;
+            var expected = "/" + UpdateSource.RepositoryOwner + "/" + UpdateSource.RepositoryName + "/releases/download/v" + version + "/" + assetName;
+            return string.Equals(uri.AbsolutePath, expected, StringComparison.OrdinalIgnoreCase);
         }
 
     }

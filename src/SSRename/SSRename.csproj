@@ -63,6 +63,7 @@
     <Compile Include="GitHubUpdateClient.cs" />
     <Compile Include="UpdatePackageService.cs" />
     <Compile Include="SettingsControl.cs" />
+    <Compile Include="PluginTabs.cs" />
     <Compile Include="SSRenamePlugin.cs" />
   </ItemGroup>
   <ItemGroup>

@@ -1,6 +1,7 @@
 using Advanced_Combat_Tracker;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -280,14 +281,16 @@ namespace SSRename
                 case UpdateCheckStatus.NotConfigured: state.MessageKey = "update_source_missing"; break;
                 case UpdateCheckStatus.UpToDate: state.MessageKey = "update_none"; updateAvailable = false; break;
                 case UpdateCheckStatus.Available: state.MessageKey = "update_available"; state.CanInstall = true; state.CanSkip = true; updateAvailable = true; break;
+                case UpdateCheckStatus.AvailableRateLimited: state.MessageKey = "update_available_rate_limited"; state.CanInstall = true; state.CanSkip = true; state.Notes = Localization.T(snapshot.Language, "update_notes_rate_limited"); updateAvailable = true; break;
+                case UpdateCheckStatus.RateLimited: state.MessageKey = "update_rate_limited"; state.IsError = true; state.MessageArgs = new object[0]; updateAvailable = false; break;
                 case UpdateCheckStatus.Skipped: state.MessageKey = "update_skipped"; state.MessageArgs = new object[] { state.LatestVersion }; break;
                 default: state.MessageKey = "update_check_failed"; state.MessageArgs = new object[] { result.Error }; state.IsError = true; break;
             }
             PostUi(delegate
             {
                 if (control != null) control.SetUpdateState(state);
-                if (state.MessageKey == "update_available" && actStatus != null)
-                    actStatus.Text = "SSRename: " + Localization.T(snapshot.Language, "update_available") + "  " + currentVersion + " → " + state.LatestVersion;
+                if ((state.MessageKey == "update_available" || state.MessageKey == "update_available_rate_limited") && actStatus != null)
+                    actStatus.Text = "SSRename: " + Localization.T(snapshot.Language, state.MessageKey) + "  " + currentVersion + " → " + state.LatestVersion;
             });
         }
 
@@ -307,12 +310,32 @@ namespace SSRename
             });
             try
             {
-                var stagedPath = await updatePackageService.PrepareAsync(release, cancellation.Token).ConfigureAwait(false);
+                var prepared = await updatePackageService.PrepareAsync(release, cancellation.Token).ConfigureAwait(false);
                 if (Volatile.Read(ref shuttingDown) != 0 || cancellation.IsCancellationRequested) return;
                 PostUi(delegate
                 {
-                    if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_ready_manual", MessageArgs = new object[] { stagedPath }, Release = release });
-                    if (actStatus != null) actStatus.Text = "SSRename: " + Localization.T(language, "update_ready_manual", stagedPath);
+                    try
+                    {
+                        var target = GetRegisteredPluginPath();
+                        if (!HashVerifier.VerifySha256(prepared.StagedDllPath, prepared.DllSha256) || !HashVerifier.VerifySha256(prepared.StagedUpdaterPath, prepared.UpdaterSha256))
+                            throw new InvalidDataException("The staged update files failed their final SHA-256 check.");
+                        var originalHash = HashVerifier.ComputeSha256(target);
+                        using (var actProcess = Process.GetCurrentProcess())
+                        {
+                            var arguments = "--pid " + actProcess.Id + " --pid-start " + actProcess.StartTime.ToUniversalTime().Ticks + " --source " + Quote(prepared.StagedDllPath) + " --target " + Quote(target) +
+                                " --sha256 " + prepared.DllSha256 + " --original " + originalHash + " --version " + release.Version;
+                            Process.Start(new ProcessStartInfo { FileName = prepared.StagedUpdaterPath, Arguments = arguments, UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(prepared.StagedUpdaterPath) });
+                        }
+                        updateAvailable = false;
+                        if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_ready", Release = release });
+                        if (actStatus != null) actStatus.Text = "SSRename: " + Localization.T(language, "update_ready");
+                    }
+                    catch (Exception ex)
+                    {
+                        var error = Localization.T(language, "update_failed", ex.GetBaseException().Message);
+                        if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_failed", MessageArgs = new object[] { ex.GetBaseException().Message }, IsError = true, CanInstall = true, CanSkip = true, Release = release });
+                        if (actStatus != null) actStatus.Text = "SSRename: " + error;
+                    }
                 });
             }
             catch (OperationCanceledException) { }
@@ -321,6 +344,31 @@ namespace SSRename
                 if (Volatile.Read(ref shuttingDown) == 0)
                     PostUi(delegate { if (control != null) control.SetUpdateState(new UpdateUiState { CurrentVersion = currentVersion.ToString(), LatestVersion = release.Version.ToString(), Notes = Summarize(release.Body), MessageKey = "update_failed", MessageArgs = new object[] { ex.GetBaseException().Message }, IsError = true, CanInstall = true, CanSkip = true, Release = release }); });
             }
+        }
+
+        private string GetRegisteredPluginPath()
+        {
+            if (ActGlobals.oFormActMain == null || ActGlobals.oFormActMain.ActPlugins == null)
+                throw new InvalidOperationException("ACT plugin registration information is unavailable.");
+            foreach (var plugin in ActGlobals.oFormActMain.ActPlugins)
+            {
+                if (!ReferenceEquals(plugin.pluginObj, this)) continue;
+                if (plugin.pluginFile == null || string.IsNullOrWhiteSpace(plugin.pluginFile.FullName))
+                    throw new InvalidOperationException("ACT did not provide the registered plugin file path.");
+                var value = plugin.pluginFile.FullName;
+                Uri uri;
+                if (Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.IsFile) value = uri.LocalPath;
+                var path = Path.GetFullPath(value);
+                if (!string.Equals(Path.GetFileName(path), "SSRename.dll", StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+                    throw new InvalidOperationException("The registered SSRename.dll path is invalid.");
+                return path;
+            }
+            throw new InvalidOperationException("SSRename was not found in ACT's registered plugin list.");
+        }
+
+        private static string Quote(string value)
+        {
+            return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
         }
 
         private void OnSkipUpdateRequested(ReleaseInfo release)

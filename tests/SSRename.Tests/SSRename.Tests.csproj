@@ -7,6 +7,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>SSRename.Tests</RootNamespace>
     <AssemblyName>SSRename.Tests</AssemblyName>
+    <StartupObject>SSRename.Tests.Program</StartupObject>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <OutputPath>bin\$(Configuration)\</OutputPath>
   </PropertyGroup>
@@ -38,10 +39,12 @@
     <Compile Include="..\..\src\SSRename\UpdateModels.cs"><Link>UpdateModels.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\SemVersion.cs"><Link>SemVersion.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\GitHubReleaseParser.cs"><Link>GitHubReleaseParser.cs</Link></Compile>
+    <Compile Include="..\..\src\SSRename\GitHubUpdateClient.cs"><Link>GitHubUpdateClient.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\UpdateSource.cs"><Link>UpdateSource.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\HashVerifier.cs"><Link>HashVerifier.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\UpdatePackageValidator.cs"><Link>UpdatePackageValidator.cs</Link></Compile>
     <Compile Include="..\..\src\SSRename\UpdatePackageService.cs"><Link>UpdatePackageService.cs</Link></Compile>
+    <Compile Include="..\..\tools\SSRename.Updater\Program.cs"><Link>UpdaterProgram.cs</Link></Compile>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\src\SSRename\Data\TerritoryType.csv"><LogicalName>SSRename.Data.TerritoryType.csv</LogicalName></EmbeddedResource>

@@ -23,7 +23,8 @@ namespace SSRename
         private Button destinationBrowseButton, checkNowButton, installButton, laterButton;
         private ComboBox languageCombo;
         private Label previewLabel, connectionValue, characterValue, placeValue, weatherValue, etValue, watcherValue;
-        private Label updateMessage, currentVersionValue, latestVersionValue, lastCheckedValue;
+        private Label updateMessage, currentVersionValue, latestVersionValue, lastCheckedValue, authorVersionValue;
+        private LinkLabel repositoryLink;
         private ListBox historyList;
         private bool building;
         private bool uiInactive;
@@ -82,10 +83,12 @@ namespace SSRename
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76f)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); Controls.Add(root);
             root.Controls.Add(BuildHeader(), 0, 0);
-            var tabs = new TabControl { Dock = DockStyle.Fill, Font = new Font("Yu Gothic UI Semibold", 9f), Padding = new Point(18, 6), DrawMode = TabDrawMode.OwnerDrawFixed };
+            var support = NewPage(T("tab_support"));
+            var tabs = new Roxyz.Act.UI.PluginTabs(support);
+            tabs.SetLanguageFont(settings.Language == Localization.ChineseSimplified ? "Microsoft YaHei UI" : settings.Language == Localization.Korean ? "Malgun Gothic" : settings.Language == Localization.Japanese ? "Yu Gothic UI" : "Segoe UI");
             root.Controls.Add(tabs, 0, 1);
-            var basic = NewPage(T("tab_basic")); var names = NewPage(T("tab_filename")); var status = NewPage(T("tab_status")); var updates = NewPage(T("tab_updates")); var support = NewPage(T("tab_support"));
-            tabs.TabPages.AddRange(new[] { basic, names, status, updates, support }); ConfigureTabAppearance(tabs, support);
+            var basic = NewPage(T("tab_basic")); var names = NewPage(T("tab_filename")); var status = NewPage(T("tab_status")); var updates = NewPage(T("tab_updates"));
+            tabs.TabPages.AddRange(new[] { basic, names, status, updates, support });
             BuildBasicPage(basic); BuildNamePage(names); BuildStatusPage(status); BuildUpdatePage(updates); BuildSupportPage(support);
             building = false; UpdateDestinationState(); UpdatePreview(); ApplyContext(); RefreshHistory(); ApplyUpdateState(); ResumeLayout(true);
         }
@@ -128,6 +131,10 @@ namespace SSRename
         private void BuildUpdatePage(TabPage page)
         {
             var table = NewTable(); page.Controls.Add(table); AddWideRow(table, UpdateHeading(T("updates_heading")));
+            authorVersionValue = NewValue(T("author_version", "Roxyz0501", Assembly.GetExecutingAssembly().GetName().Version.ToString(3))); AddWideRow(table, authorVersionValue);
+            repositoryLink = new LinkLabel { Text = "https://github.com/Roxyz0501/ssrename", AutoSize = true, LinkColor = Color.FromArgb(47, 93, 145), ActiveLinkColor = Color.FromArgb(28, 65, 108), VisitedLinkColor = Color.FromArgb(76, 92, 117), Margin = new Padding(4, 4, 4, 8) };
+            repositoryLink.LinkClicked += delegate { try { Process.Start(new ProcessStartInfo("https://github.com/Roxyz0501/ssrename") { UseShellExecute = true }); } catch (Exception ex) { updateMessage.Text = T("update_link_failed", ex.GetBaseException().Message); updateMessage.ForeColor = Color.FromArgb(176, 65, 56); } };
+            AddWideRow(table, repositoryLink);
             checkUpdatesCheck = new CheckBox { Text = T("check_startup"), AutoSize = true, Checked = settings.CheckUpdatesOnStartup }; AddWideRow(table, checkUpdatesCheck);
             currentVersionValue = NewValue(Assembly.GetExecutingAssembly().GetName().Version.ToString(3)); latestVersionValue = NewValue("—"); lastCheckedValue = NewValue(string.IsNullOrWhiteSpace(settings.LastUpdateCheckUtc) ? "—" : settings.LastUpdateCheckUtc);
             AddRow(table, T("current_version"), currentVersionValue); AddRow(table, T("latest_version"), latestVersionValue); AddRow(table, T("last_checked"), lastCheckedValue);
@@ -167,14 +174,7 @@ namespace SSRename
         private void RefreshHistory() { if (historyList == null) return; historyList.Items.Clear(); foreach (var item in history) historyList.Items.Add(item); }
         private Panel BuildHeader()
         {
-            var panel = new Panel { Dock = DockStyle.Top, Height = 76, BackColor = Color.White }; panel.Controls.Add(new Label { Text = T("title"), Font = new Font("Yu Gothic UI Semibold", 17f, FontStyle.Bold), ForeColor = Color.FromArgb(34, 44, 61), AutoSize = true, Location = new Point(18, 9) }); panel.Controls.Add(new Label { Text = T("subtitle"), Font = new Font("Yu Gothic UI", 8.5f), ForeColor = Color.FromArgb(103, 116, 137), AutoSize = true, Location = new Point(20, 43) });
-            var version = new Label { Text = "v" + Assembly.GetExecutingAssembly().GetName().Version.ToString(3) + "  |  Author: Roxyz0501", Font = new Font("Segoe UI", 8f), ForeColor = Color.FromArgb(113, 126, 146), AutoSize = true }; panel.Controls.Add(version); panel.Resize += delegate { version.Location = new Point(Math.Max(4, panel.ClientSize.Width - version.Width - 14), Math.Max(4, panel.ClientSize.Height - version.Height - 7)); }; panel.Controls.Add(new Panel { Dock = DockStyle.Bottom, Height = 2, BackColor = Color.FromArgb(202, 165, 87) }); return panel;
-        }
-
-        private static void ConfigureTabAppearance(TabControl tabs, TabPage support)
-        {
-            var hovered = -1; tabs.DrawItem += delegate(object sender, DrawItemEventArgs e) { var isSupport = tabs.TabPages[e.Index] == support; var selected = tabs.SelectedIndex == e.Index; var isHovered = hovered == e.Index; var bg = selected ? Color.White : Color.FromArgb(240, 242, 245); var fg = Color.FromArgb(42, 53, 69); if (isSupport) { bg = selected ? Color.FromArgb(255, 245, 226) : (isHovered ? Color.FromArgb(255, 238, 207) : Color.FromArgb(250, 231, 197)); fg = selected ? Color.FromArgb(137, 62, 7) : (isHovered ? Color.FromArgb(157, 72, 8) : Color.FromArgb(174, 84, 13)); } else if (isHovered && !selected) bg = Color.FromArgb(247, 248, 250); using (var brush = new SolidBrush(bg)) e.Graphics.FillRectangle(brush, e.Bounds); TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, fg, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine); if (isSupport && selected) using (var pen = new Pen(Color.FromArgb(213, 137, 32), 2f)) e.Graphics.DrawLine(pen, e.Bounds.Left + 4, e.Bounds.Bottom - 2, e.Bounds.Right - 4, e.Bounds.Bottom - 2); };
-            tabs.MouseMove += delegate(object sender, MouseEventArgs e) { var next = -1; for (var i = 0; i < tabs.TabCount; i++) if (tabs.GetTabRect(i).Contains(e.Location)) { next = i; break; } if (next != hovered) { hovered = next; tabs.Invalidate(); } }; tabs.MouseLeave += delegate { hovered = -1; tabs.Invalidate(); };
+            var panel = new Panel { Dock = DockStyle.Top, Height = 76, BackColor = Color.White }; panel.Controls.Add(new Label { Text = T("title"), Font = new Font("Yu Gothic UI Semibold", 17f, FontStyle.Bold), ForeColor = Color.FromArgb(34, 44, 61), AutoSize = true, Location = new Point(18, 9) }); panel.Controls.Add(new Label { Text = T("subtitle"), Font = new Font("Yu Gothic UI", 8.5f), ForeColor = Color.FromArgb(103, 116, 137), AutoSize = true, Location = new Point(20, 43) }); panel.Controls.Add(new Panel { Dock = DockStyle.Bottom, Height = 2, BackColor = Color.FromArgb(202, 165, 87) }); return panel;
         }
 
         private static TabPage NewPage(string text) { return new TabPage(text) { BackColor = Color.White, Padding = new Padding(4) }; }

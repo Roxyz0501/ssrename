@@ -39,7 +39,13 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: dotnet msbuild SSRename.sln -t:Rebuild -p:Configuration=Release "-p:ACTPath=$env:ACT_PATH" -v:minimal
+        run: |
+          dotnet msbuild src/SSRename/SSRename.csproj -t:Rebuild -p:Configuration=Release -p:UseSharedCompilation=false "-p:ACTPath=$env:ACT_PATH" -v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet msbuild tools/SSRename.Updater/SSRename.Updater.csproj -t:Rebuild -p:Configuration=Release -p:UseSharedCompilation=false -v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet msbuild tests/SSRename.Tests/SSRename.Tests.csproj -t:Rebuild -p:Configuration=Release -p:UseSharedCompilation=false -v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test
         shell: pwsh

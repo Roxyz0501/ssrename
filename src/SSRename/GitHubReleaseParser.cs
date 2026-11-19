@@ -23,6 +23,13 @@ namespace SSRename
             return best;
         }
 
+        public static ReleaseInfo ParseRelease(string json)
+        {
+            var data = new JavaScriptSerializer().DeserializeObject(json) as IDictionary<string, object>;
+            if (data == null) throw new FormatException("GitHub release response is not an object.");
+            return Parse(data);
+        }
+
         private static ReleaseInfo Parse(IDictionary<string, object> data)
         {
             var release = new ReleaseInfo

@@ -52,18 +52,18 @@ FFXIV Parsing Plugin (`FFXIV_ACT_Plugin.dll`) を先に有効にしてくださ�
 
 ## 更新機能
 
-設定画面の「更新」タブでは、起動時の更新確認をON/OFFでき、「今すぐ確認」も実行できます。確認はUIを止めない非同期処理で、安定版ReleaseのみをSemVer比較します。更新がある場合は現在版、最新版、更新内容、「更新する」「後で」をACT画面内に表示します。ダウンロードは「更新する」を押した場合だけ行われ、自動更新はしません。
+設定画面の「更新」タブでは、作者、インストール済みバージョン、GitHubリポジトリへのリンクを確認できます。起動時の更新確認をON/OFFでき、「今すぐ確認」も実行できます。確認はUIを止めない非同期処理で、安定版ReleaseのみをSemVer比較します。更新がある場合は現在版、最新版、更新内容、「更新する」「後で」をACT画面内に表示します。ダウンロードと置換準備は「更新する」を押した場合だけ行います。
 
 更新パッケージは次を検証します。
 
 - GitHubのHTTPS API／Release assetのみ許可
 - draft／prereleaseを除外
 - `SSRename-<version>.zip` とReleaseタグ、DLL名、DLLバージョンの一致
-- `SHA256SUMS.txt` がある場合のSHA-256照合
+- 必須の `SHA256SUMS.txt` によるSHA-256照合
 - ZIP内の許可ファイル限定、絶対パス／親ディレクトリ／サブディレクトリ拒否
 - 最大サイズとリダイレクト先GitHubホストの制限
 
-検証済みDLLは一時領域へ準備します。ロード中のDLLは変更せず、ACTを完全に終了した後に画面に表示された一時領域のDLLをプラグイン配置先の `SSRename.dll` へ手動で置き換えてください。置き換え前に現行DLLをバックアップし、更新後にACTを再起動してください。プラグイン終了後に補助プロセスが残らないよう、更新の自動置換は行いません。
+更新ボタンで検証済みDLLと補助Updaterを一時領域へ準備し、ACTの登録情報から対象DLLの実パスを確認したうえでUpdaterを起動します。ロード中のDLLは変更しません。ACTを終了するとUpdaterが対象プロセスの終了を待ち、現行DLLを同じ配置先へバックアップしてから自動置換します。検証に失敗した場合はバックアップから復元します。更新後はACTを再起動してください。Updaterは更新開始の明示操作時に限って起動し、置換完了または失敗後に終了します。
 
 ### 更新元
 
@@ -71,7 +71,7 @@ FFXIV Parsing Plugin (`FFXIV_ACT_Plugin.dll`) を先に有効にしてくださ�
 
 ### GitHub Releaseの作成
 
-1. `AssemblyInfo.cs` のAssemblyVersion／AssemblyFileVersionをRelease版へ更新します。
+1. プラグインと `tools/SSRename.Updater/Properties/AssemblyInfo.cs` のAssemblyVersion／AssemblyFileVersionを同じRelease版へ更新します。
 2. ACTを参照できるWindows環境で次を実行します。
 
 ```powershell

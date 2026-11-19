@@ -21,12 +21,24 @@ namespace SSRename
         public SemVersion Version { get; set; }
     }
 
+    internal sealed class PreparedUpdate
+    {
+        public string StagedDllPath { get; set; }
+        public string StagedUpdaterPath { get; set; }
+        public string DllSha256 { get; set; }
+        public string UpdaterSha256 { get; set; }
+        public string OriginalDllSha256 { get; set; }
+        public ReleaseInfo Release { get; set; }
+    }
+
     internal enum UpdateCheckStatus
     {
         NotConfigured,
         UpToDate,
         Available,
+        AvailableRateLimited,
         Skipped,
+        RateLimited,
         Failed
     }
 

@@ -11,6 +11,6 @@
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' "><Optimize>true</Optimize><DefineConstants>TRACE</DefineConstants></PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' "><DebugSymbols>true</DebugSymbols><DebugType>full</DebugType><DefineConstants>DEBUG;TRACE</DefineConstants></PropertyGroup>
   <ItemGroup><Reference Include="System" /><Reference Include="System.Core" /></ItemGroup>
-  <ItemGroup><Compile Include="Program.cs" /><Compile Include="..\..\src\SSRename\HashVerifier.cs"><Link>HashVerifier.cs</Link></Compile></ItemGroup>
+  <ItemGroup><Compile Include="Program.cs" /><Compile Include="Properties\AssemblyInfo.cs" /><Compile Include="..\..\src\SSRename\HashVerifier.cs"><Link>HashVerifier.cs</Link></Compile></ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
